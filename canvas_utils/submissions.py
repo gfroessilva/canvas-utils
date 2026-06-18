@@ -185,7 +185,10 @@ def _resolve_csv_output_path(
     current_assignment_id: int,
     assignment_name: str,
 ) -> Path:
-    file_name = f"canvas_submissions_{current_assignment_id}_{_slugify_filename_part(assignment_name)}.csv"
+    export_date = datetime.now().strftime("%Y-%m-%d")
+    file_name = (
+        f"canvas_submissions_{current_assignment_id}_{_slugify_filename_part(assignment_name)}_{export_date}.csv"
+    )
 
     if assignment_id is None:
         if output_path.suffix.lower() == ".csv":

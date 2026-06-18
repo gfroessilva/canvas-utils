@@ -4,6 +4,8 @@
 
 This initial version implements **Submission Timestamp Extractor**, which exports submission metadata to CSV.
 
+It also includes a **Grades Exporter**, which exports assignment marks to XLSX together with grader identity where Canvas exposes it.
+
 ## Requirements
 
 - Python 3.10+
@@ -74,6 +76,20 @@ Execute deletion:
 python .\run.py cleanup --course 12345 --targets all --execute
 ```
 
+### Grades exporter
+
+Single assignment:
+
+```powershell
+python .\run.py grades --course 12345 --assignment 67890 --output .\exports
+```
+
+All assignments in a course:
+
+```powershell
+python .\run.py grades --course 12345 --assignment all --output .\exports
+```
+
 Cleanup targets:
 
 - `pages`
@@ -102,4 +118,44 @@ Optional fields can be added with `--fields` or `submission_fields` in `config.j
 
 Filename format:
 
-- `canvas_submissions_[assignment_id]_[assignment_name].csv`
+- `canvas_submissions_[assignment_id]_[assignment_name]_[export_date].csv`
+
+The grades exporter writes XLSX file(s) with:
+
+- a `Grades` worksheet with the schema:
+
+- `Assignment_ID`
+- `Assignment_Name`
+- `Student_ID`
+- `Student_Name`
+- `Student_Login_ID`
+- `Score`
+- `Grade`
+- `Entered_Grade`
+- `Workflow_State`
+- `Grader_ID`
+- `Grader_Name`
+- `Grader_Login_ID`
+- `Grader_SIS_ID`
+- `Grader_Type`
+
+- a `Marker Statistics` worksheet with per-marker summary rows:
+  - `Submission_Count`
+  - `Scored_Submission_Count`
+  - `Unscored_Submission_Count`
+  - `Average_Score`
+  - `Minimum_Score`
+  - `Maximum_Score`
+
+Notes:
+
+- `Grader_Type` is `human`, `automatic`, or `ungraded`.
+- The exporter first resolves graders through the global Users API, then falls back to a course-scoped user lookup before marking a grader as `unresolvable`.
+- Canvas may hide grader identity for anonymous grading.
+- Auto-graded submissions can expose a non-human grader identifier.
+- Marker statistics are written as Excel formulas so they recalculate if you edit the `Grades` sheet manually.
+- `Average_Score` is rounded to 2 decimal places when needed.
+
+Filename format:
+
+- `canvas_grades_[assignment_id]_[assignment_name]_[export_date].xlsx`

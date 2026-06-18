@@ -7,12 +7,16 @@ import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode, urljoin
+from urllib.parse import quote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 
 class CanvasAPIError(RuntimeError):
     """Raised when Canvas API requests fail or payloads are invalid."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass(frozen=True)
@@ -176,6 +180,22 @@ class CanvasClient:
         )
         return self._expect_list(payload, "calendar events")
 
+    def get_user(self, user_id: int) -> dict[str, Any]:
+        """Return a Canvas user record by ID."""
+        response = self.request_json(
+            f"/api/v1/users/{user_id}",
+            method="GET",
+        )
+        return self._expect_dict(response.payload, "user")
+
+    def get_course_user(self, course_id: int, user_id: int) -> dict[str, Any]:
+        """Return a Canvas user record within a specific course context."""
+        response = self.request_json(
+            f"/api/v1/courses/{course_id}/users/{user_id}",
+            method="GET",
+        )
+        return self._expect_dict(response.payload, "course user")
+
     def delete_calendar_event(self, event_id: int) -> None:
         """Delete a calendar event."""
         self.request_json(
@@ -229,7 +249,10 @@ class CanvasClient:
                 return _ResponseData(payload=payload, headers=dict(response.headers.items()))
         except HTTPError as exc:
             response_body = exc.read().decode("utf-8", errors="replace")
-            raise CanvasAPIError(_format_http_error(url, exc.code, exc.reason, response_body)) from exc
+            raise CanvasAPIError(
+                _format_http_error(url, exc.code, exc.reason, response_body),
+                status_code=exc.code,
+            ) from exc
         except URLError as exc:
             raise CanvasAPIError(f"Network error while contacting Canvas at {url}: {exc.reason}") from exc
         except json.JSONDecodeError as exc:
@@ -286,10 +309,40 @@ def _format_http_error(url: str, status_code: int, reason: str, response_body: s
         )
 
     if status_code == 404:
-        return (
-            "Canvas resource not found (404 Not Found). "
-            "Verify the base URL, course ID, and assignment ID are correct."
-            f" URL: {url}.{snippet}"
-        )
+        return f"{_describe_not_found_url(url)} URL: {url}.{snippet}"
 
     return f"Canvas API request failed ({status_code} {reason}) for {url}.{snippet}"
+
+
+def _describe_not_found_url(url: str) -> str:
+    """Return an endpoint-specific explanation for Canvas 404 errors."""
+    path = urlparse(url).path
+
+    if re.search(r"/api/v1/users/\d+$", path):
+        return (
+            "Canvas user not found (404 Not Found). "
+            "The referenced user may be deleted, hidden from your API token, or only valid in a different Canvas context."
+        )
+
+    if re.search(r"/api/v1/courses/\d+/assignments/\d+/submissions(?:/\d+)?$", path):
+        return (
+            "Canvas submissions resource not found (404 Not Found). "
+            "Verify the base URL, course ID, and assignment ID, and confirm your token can access submissions for that assignment."
+        )
+
+    if re.search(r"/api/v1/courses/\d+/assignments(?:/\d+)?$", path):
+        return (
+            "Canvas assignment resource not found (404 Not Found). "
+            "Verify the base URL, course ID, and assignment ID, and confirm the assignment exists in that course."
+        )
+
+    if re.search(r"/api/v1/courses/\d+$", path):
+        return (
+            "Canvas course not found (404 Not Found). "
+            "Verify the base URL and course ID, and confirm your token can access that course."
+        )
+
+    return (
+        "Canvas resource not found (404 Not Found). "
+        "Verify the base URL and any referenced Canvas IDs, and confirm your token has access to that resource."
+    )

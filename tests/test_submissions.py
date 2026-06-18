@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr
@@ -67,8 +68,8 @@ class SubmissionExtractionTests(unittest.TestCase):
             csv_path = written_files[0]
             self.assertTrue(csv_path.exists())
             self.assertEqual(
-                csv_path.name,
-                "canvas_submissions_101_assessment_1_intro_basics.csv",
+                bool(re.fullmatch(r"canvas_submissions_101_assessment_1_intro_basics_\d{4}-\d{2}-\d{2}\.csv", csv_path.name)),
+                True,
             )
 
             with csv_path.open("r", newline="", encoding="utf-8") as handle:

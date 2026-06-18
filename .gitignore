@@ -1,0 +1,13 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Local credentials
+config.json
+
+# Generated exports
+exports/
+*.csv
+*.xlsx
+*.csv
+*.xlsx
