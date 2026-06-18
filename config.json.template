@@ -1,0 +1,5 @@
+{
+  "canvas_base_url": "https://canvas.example.edu",
+  "canvas_api_token": "REPLACE_WITH_TOKEN",
+  "submission_fields": ["student_name", "submitted_at_brisbane"]
+}
