@@ -12,6 +12,7 @@ from typing import Any
 from canvas_utils.api_client import CanvasAPIError, CanvasClient
 from canvas_utils.cleanup import cleanup_course_resources, resolve_cleanup_targets
 from canvas_utils.grades import export_assignment_grades
+from canvas_utils.students import export_course_students
 from canvas_utils.submissions import extract_submission_timestamps, resolve_optional_fields
 
 
@@ -24,6 +25,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_submissions_command(args)
     if args.command == "grades":
         return _run_grades_command(args)
+    if args.command == "students":
+        return _run_students_command(args)
     if args.command == "cleanup":
         return _run_cleanup_command(args)
 
@@ -145,6 +148,37 @@ def _run_grades_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_students_command(args: argparse.Namespace) -> int:
+    """Handle students XLSX export command."""
+    try:
+        base_url, token, _config_values = load_runtime_credentials(
+            config_path=Path(args.config) if args.config else None,
+            canvas_url_override=args.canvas_url,
+            token_override=args.token,
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    client = CanvasClient(base_url=base_url, token=token, timeout=args.timeout)
+
+    try:
+        written_files = export_course_students(
+            client=client,
+            course_id=args.course,
+            output=args.output,
+            active_only=args.active_only,
+        )
+    except (CanvasAPIError, ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    for output_file in written_files:
+        print(f"Wrote: {output_file}")
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build and return the argument parser."""
     parser = argparse.ArgumentParser(description="Canvas utility command-line interface.")
@@ -232,6 +266,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output directory, or XLSX file path when exporting a single assignment.",
     )
     _add_common_canvas_options(grades_parser)
+
+    students_parser = subparsers.add_parser(
+        "students",
+        help="Export course student roster to XLSX.",
+        description="Export Canvas course students to XLSX with student identity columns.",
+    )
+    students_parser.add_argument(
+        "--course",
+        type=int,
+        required=True,
+        help="Canvas course ID.",
+    )
+    students_parser.add_argument(
+        "--output",
+        default=".",
+        help="Output directory, or XLSX file path for the exported student roster.",
+    )
+    students_parser.add_argument(
+        "--active-only",
+        action="store_true",
+        help="Export only active student enrollments. Default behavior includes all student enrollments.",
+    )
+    _add_common_canvas_options(students_parser)
 
     return parser
 

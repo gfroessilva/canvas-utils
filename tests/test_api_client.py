@@ -2,7 +2,23 @@ from __future__ import annotations
 
 import unittest
 
-from canvas_utils.api_client import _format_http_error
+from canvas_utils.api_client import CanvasClient, _format_http_error
+
+
+class RecordingCanvasClient(CanvasClient):
+    def __init__(self) -> None:
+        super().__init__(base_url="https://canvas.example.edu", token="token")
+        self.last_path_or_url: str | None = None
+        self.last_params: dict[str, object] | None = None
+
+    def get_paginated_json(
+        self,
+        path_or_url: str,
+        params: dict[str, object] | None = None,
+    ) -> list[object]:
+        self.last_path_or_url = path_or_url
+        self.last_params = params
+        return []
 
 
 class CanvasApiClientErrorFormattingTests(unittest.TestCase):
@@ -38,6 +54,39 @@ class CanvasApiClientErrorFormattingTests(unittest.TestCase):
 
         self.assertIn("Canvas resource not found (404 Not Found).", message)
         self.assertIn("referenced Canvas IDs", message)
+
+
+class CanvasApiClientStudentsTests(unittest.TestCase):
+    def test_list_course_students_uses_student_enrollment_filter(self) -> None:
+        client = RecordingCanvasClient()
+
+        students = client.list_course_students(course_id=321)
+
+        self.assertEqual(students, [])
+        self.assertEqual(client.last_path_or_url, "/api/v1/courses/321/users")
+        self.assertEqual(
+            client.last_params,
+            {
+                "per_page": 100,
+                "enrollment_type[]": ["student"],
+            },
+        )
+
+    def test_list_course_students_active_only_adds_enrollment_state_filter(self) -> None:
+        client = RecordingCanvasClient()
+
+        students = client.list_course_students(course_id=321, active_only=True)
+
+        self.assertEqual(students, [])
+        self.assertEqual(client.last_path_or_url, "/api/v1/courses/321/users")
+        self.assertEqual(
+            client.last_params,
+            {
+                "per_page": 100,
+                "enrollment_type[]": ["student"],
+                "enrollment_state[]": ["active"],
+            },
+        )
 
 
 if __name__ == "__main__":
