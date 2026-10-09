@@ -12,6 +12,15 @@ from typing import Any
 from canvas_utils.api_client import CanvasAPIError, CanvasClient
 from canvas_utils.cleanup import cleanup_course_resources, resolve_cleanup_targets
 from canvas_utils.grades import export_assignment_grades
+from canvas_utils.quizzes import (
+    QuizValidationError,
+    create_quiz_template,
+    create_quiz_template_excel,
+    create_quiz_template_json,
+    deploy_quiz,
+    load_quiz_from_excel,
+    load_quiz_from_json,
+)
 from canvas_utils.students import export_course_students
 from canvas_utils.submissions import extract_submission_timestamps, resolve_optional_fields
 
@@ -29,6 +38,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_students_command(args)
     if args.command == "cleanup":
         return _run_cleanup_command(args)
+    if args.command == "quiz":
+        return _run_quiz_command(args)
 
     print(f"Error: Unsupported command '{args.command}'.", file=sys.stderr)
     return 1
@@ -179,6 +190,78 @@ def _run_students_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_quiz_command(args: argparse.Namespace) -> int:
+    """Handle Canvas quiz creation and template generation command."""
+    if args.quiz_action == "template":
+        try:
+            output_path = create_quiz_template(args.output)
+            print(f"Generated quiz authoring template: {output_path}")
+            return 0
+        except (ValueError, OSError) as exc:
+            print(f"Error creating template: {exc}", file=sys.stderr)
+            return 1
+
+    if args.quiz_action == "create":
+        input_path = Path(args.input)
+        try:
+            if input_path.suffix.lower() == ".json":
+                quiz_spec = load_quiz_from_json(input_path)
+            elif input_path.suffix.lower() in {".xlsx", ".xlsm"}:
+                quiz_spec = load_quiz_from_excel(input_path)
+            else:
+                print(
+                    f"Error: Unsupported quiz file format '{input_path.suffix}'. Use .json or .xlsx.",
+                    file=sys.stderr,
+                )
+                return 1
+        except (QuizValidationError, FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+            print(f"Error validating quiz file: {exc}", file=sys.stderr)
+            return 1
+
+        print(
+            f"Validated quiz '{quiz_spec.title}': {len(quiz_spec.questions)} questions, "
+            f"{quiz_spec.total_points} total points, type='{quiz_spec.quiz_type}'."
+        )
+
+        if args.dry_run:
+            print("Dry run complete. Quiz structure is valid and ready for upload.")
+            return 0
+
+        # Upload to Canvas
+        try:
+            base_url, token, _ = load_runtime_credentials(
+                config_path=Path(args.config) if args.config else None,
+                canvas_url_override=args.canvas_url,
+                token_override=args.token,
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+
+        client = CanvasClient(base_url=base_url, token=token, timeout=args.timeout)
+
+        try:
+            result = deploy_quiz(
+                client=client,
+                course_id=args.course,
+                quiz_spec=quiz_spec,
+                publish=args.publish,
+            )
+            print(
+                f"Successfully created quiz #{result['quiz_id']}: '{quiz_spec.title}' "
+                f"with {result['question_count']} questions."
+            )
+            if result.get("html_url"):
+                print(f"Canvas URL: {result['html_url']}")
+            return 0
+        except (CanvasAPIError, QuizValidationError) as exc:
+            print(f"Error deploying quiz to Canvas: {exc}", file=sys.stderr)
+            return 1
+
+    print(f"Error: Unsupported quiz action '{args.quiz_action}'.", file=sys.stderr)
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build and return the argument parser."""
     parser = argparse.ArgumentParser(description="Canvas utility command-line interface.")
@@ -290,6 +373,51 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_common_canvas_options(students_parser)
 
+    # Quiz subparser
+    quiz_parser = subparsers.add_parser(
+        "quiz",
+        help="Author, validate, and programmatically create Canvas quizzes.",
+        description="Create Canvas quizzes programmatically from Excel or JSON specifications.",
+    )
+    quiz_subparsers = quiz_parser.add_subparsers(dest="quiz_action", required=True)
+
+    quiz_template_parser = quiz_subparsers.add_parser(
+        "template",
+        help="Generate a starter JSON or Excel workbook template for quiz authoring.",
+    )
+    quiz_template_parser.add_argument(
+        "--output",
+        default="quiz_template.xlsx",
+        help="Output path for the template file (e.g., quiz_template.json or quiz_template.xlsx).",
+    )
+
+    quiz_create_parser = quiz_subparsers.add_parser(
+        "create",
+        help="Validate and upload a quiz to Canvas from an Excel or JSON file.",
+    )
+    quiz_create_parser.add_argument(
+        "--course",
+        type=_parse_positive_int,
+        required=True,
+        help="Canvas course ID.",
+    )
+    quiz_create_parser.add_argument(
+        "--input",
+        required=True,
+        help="Path to the quiz JSON or Excel (.xlsx) file.",
+    )
+    quiz_create_parser.add_argument(
+        "--publish",
+        action="store_true",
+        help="Publish the quiz immediately upon creation (default: false / draft).",
+    )
+    quiz_create_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate quiz structure and question formats without calling Canvas API.",
+    )
+    _add_common_canvas_options(quiz_create_parser)
+
     return parser
 
 
@@ -397,6 +525,16 @@ def _add_common_canvas_options(parser: argparse.ArgumentParser) -> None:
         default=30,
         help="Per-request timeout in seconds.",
     )
+
+
+def _parse_positive_int(raw_value: str) -> int:
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer.") from exc
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer.")
+    return value
 
 
 if __name__ == "__main__":
