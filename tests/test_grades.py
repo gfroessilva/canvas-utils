@@ -8,7 +8,12 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from canvas_utils.api_client import CanvasAPIError
-from canvas_utils.grades import GRADE_HEADERS, MARKER_STATS_HEADERS, export_assignment_grades
+from canvas_utils.grades import (
+    GRADE_HEADERS,
+    MARKER_STATS_HEADERS,
+    RUBRIC_ASSESSMENT_HEADERS,
+    export_assignment_grades,
+)
 from run import build_parser
 
 
@@ -123,6 +128,73 @@ class FakeUnresolvableGraderClient(FakeCourseScopedGraderClient):
             "Canvas resource not found (404 Not Found).",
             status_code=404,
         )
+
+
+class FakeRubricGradesClient(FakeGradesClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.assignment_requests: list[tuple[int, int, bool]] = []
+        self.submission_requests: list[tuple[int, int, bool, bool]] = []
+
+    def get_assignment(
+        self,
+        course_id: int,
+        assignment_id: int,
+        *,
+        include_rubric: bool = False,
+    ) -> dict[str, object]:
+        self.assignment_requests.append((course_id, assignment_id, include_rubric))
+        return {
+            "id": assignment_id,
+            "rubric": [
+                {
+                    "id": "_criterion-1",
+                    "description": "Argument quality",
+                    "ratings": [
+                        {
+                            "id": "rating-strong",
+                            "description": "Excellent",
+                            "points": 5,
+                        }
+                    ],
+                }
+            ],
+        }
+
+    def list_submissions(
+        self,
+        course_id: int,
+        assignment_id: int,
+        include_user: bool = True,
+        *,
+        include_rubric_assessment: bool = False,
+    ) -> list[dict[str, object]]:
+        self.submission_requests.append((course_id, assignment_id, include_user, include_rubric_assessment))
+        return [
+            {
+                "assignment_id": assignment_id,
+                "user_id": 7,
+                "score": 5,
+                "grade": "5",
+                "entered_grade": "5",
+                "workflow_state": "graded",
+                "grader_id": 99,
+                "user": {"name": "Jane Doe", "login_id": "jdoe"},
+                "rubric_assessment": {
+                    "criterion_criterion-1": {
+                        "rating_id": "rating-strong",
+                        "points": 5,
+                        "comments": "Well supported.",
+                    },
+                    "criterion_unknown": {
+                        "rating_id": "rating-custom",
+                        "description": "Custom descriptor",
+                        "points": 2,
+                        "comments": "Manual score.",
+                    },
+                },
+            }
+        ]
 
 
 class GradeExportTests(unittest.TestCase):
@@ -251,12 +323,54 @@ class GradeExportTests(unittest.TestCase):
         self.assertEqual(grade_rows[1][10], "Unresolvable grader")
         self.assertEqual(grade_rows[1][13], "unresolvable")
 
+    def test_export_assignment_grades_writes_selected_rubric_descriptors(self) -> None:
+        client = FakeRubricGradesClient()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            written_files = export_assignment_grades(
+                client=client,
+                course_id=123,
+                assignment_id=101,
+                output=Path(temp_dir),
+                include_rubric_assessment=True,
+            )
+
+            workbook = load_workbook(written_files[0], data_only=False)
+            rubric_rows = list(workbook["Rubric Assessments"].iter_rows(values_only=True))
+
+        self.assertEqual(client.assignment_requests, [(123, 101, True)])
+        self.assertEqual(client.submission_requests, [(123, 101, True, True)])
+        self.assertEqual(list(rubric_rows[0]), RUBRIC_ASSESSMENT_HEADERS)
+        self.assertEqual(
+            rubric_rows[1],
+            (
+                101,
+                "Assessment 1: Intro / Basics",
+                7,
+                "Jane Doe",
+                "jdoe",
+                99,
+                "Marker One",
+                "marker1",
+                "M001",
+                "human",
+                "_criterion-1",
+                "Argument quality",
+                "rating-strong",
+                "Excellent",
+                5,
+                "Well supported.",
+            ),
+        )
+        self.assertEqual(rubric_rows[2][10:16], ("criterion_unknown", None, "rating-custom", "Custom descriptor", 2, "Manual score."))
+
     def test_cli_exposes_grades_subcommand(self) -> None:
         parser = build_parser()
-        args = parser.parse_args(["grades", "--course", "123", "--assignment", "456"])
+        args = parser.parse_args(["grades", "--course", "123", "--assignment", "456", "--rubric-assessment"])
         self.assertEqual(args.command, "grades")
         self.assertEqual(args.course, 123)
         self.assertEqual(args.assignment, "456")
+        self.assertTrue(args.rubric_assessment)
 
 
 if __name__ == "__main__":

@@ -137,6 +137,7 @@ def _run_grades_command(args: argparse.Namespace) -> int:
             course_id=args.course,
             assignment_id=assignment_id,
             output=args.output,
+            include_rubric_assessment=args.rubric_assessment,
         )
     except (CanvasAPIError, ValueError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -264,6 +265,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         default=".",
         help="Output directory, or XLSX file path when exporting a single assignment.",
+    )
+    grades_parser.add_argument(
+        "--rubric-assessment",
+        action="store_true",
+        help="Include a Rubric Assessments worksheet with selected criteria and descriptors.",
     )
     _add_common_canvas_options(grades_parser)
 

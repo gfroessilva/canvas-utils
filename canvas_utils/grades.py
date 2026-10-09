@@ -12,6 +12,14 @@ from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
 from canvas_utils.api_client import CanvasAPIError, CanvasClient
+from canvas_utils.rubrics import (
+    criterion_id_aliases as _criterion_id_aliases,
+    extract_rubric_criteria as _extract_rubric_criteria,
+    find_rubric_rating as _find_rubric_rating,
+    identifier_or_none as _identifier_or_none,
+    index_rubric_criteria as _index_rubric_criteria,
+    rubric_criterion_description as _rubric_criterion_description,
+)
 
 GRADE_HEADERS = [
     "Assignment_ID",
@@ -44,6 +52,25 @@ MARKER_STATS_HEADERS = [
     "Maximum_Score",
 ]
 
+RUBRIC_ASSESSMENT_HEADERS = [
+    "Assignment_ID",
+    "Assignment_Name",
+    "Student_ID",
+    "Student_Name",
+    "Student_Login_ID",
+    "Grader_ID",
+    "Grader_Name",
+    "Grader_Login_ID",
+    "Grader_SIS_ID",
+    "Grader_Type",
+    "Criterion_ID",
+    "Criterion_Description",
+    "Rating_ID",
+    "Selected_Descriptor",
+    "Points",
+    "Comments",
+]
+
 AUTO_GRADED_LABEL = "Auto-graded"
 UNGRADED_LABEL = "Ungraded"
 UNRESOLVED_GRADER_LABEL = "Unresolvable grader"
@@ -54,6 +81,8 @@ def export_assignment_grades(
     course_id: int,
     assignment_id: int | None,
     output: str | Path = ".",
+    *,
+    include_rubric_assessment: bool = False,
 ) -> list[Path]:
     """Export assignment grades with grader identity to XLSX."""
     target_assignments = _resolve_assignment_records(client, course_id, assignment_id)
@@ -62,11 +91,27 @@ def export_assignment_grades(
     written_files: list[Path] = []
 
     for current_assignment_id, assignment_name in target_assignments:
-        submissions = client.list_submissions(
-            course_id=course_id,
-            assignment_id=current_assignment_id,
-            include_user=True,
-        )
+        if include_rubric_assessment:
+            rubric_assignment = client.get_assignment(
+                course_id=course_id,
+                assignment_id=current_assignment_id,
+                include_rubric=True,
+            )
+            rubric_criteria = _extract_rubric_criteria(rubric_assignment)
+            submissions = client.list_submissions(
+                course_id=course_id,
+                assignment_id=current_assignment_id,
+                include_user=True,
+                include_rubric_assessment=True,
+            )
+        else:
+            rubric_criteria = []
+            submissions = client.list_submissions(
+                course_id=course_id,
+                assignment_id=current_assignment_id,
+                include_user=True,
+            )
+
         rows = [
             _map_grade_row(
                 submission=submission,
@@ -78,13 +123,26 @@ def export_assignment_grades(
             )
             for submission in submissions
         ]
+        rubric_rows = (
+            [
+                rubric_row
+                for submission, grade_row in zip(submissions, rows)
+                for rubric_row in _map_rubric_assessment_rows(
+                    submission=submission,
+                    grade_row=grade_row,
+                    rubric_criteria=rubric_criteria,
+                )
+            ]
+            if include_rubric_assessment
+            else None
+        )
         xlsx_path = _resolve_xlsx_output_path(
             output_path=output_path,
             assignment_id=assignment_id,
             current_assignment_id=current_assignment_id,
             assignment_name=assignment_name,
         )
-        _write_workbook(xlsx_path, rows)
+        _write_workbook(xlsx_path, rows, rubric_rows)
         written_files.append(xlsx_path)
 
     return written_files
@@ -123,6 +181,69 @@ def _map_grade_row(
         "Grader_SIS_ID": grader_sis_id,
         "Grader_Type": grader_type,
     }
+
+
+def _map_rubric_assessment_rows(
+    *,
+    submission: dict[str, Any],
+    grade_row: dict[str, Any],
+    rubric_criteria: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rubric_assessment = submission.get("rubric_assessment")
+    if not isinstance(rubric_assessment, dict):
+        return []
+
+    criteria_by_id = _index_rubric_criteria(rubric_criteria)
+    rows: list[dict[str, Any]] = []
+
+    for raw_criterion_id, selection in rubric_assessment.items():
+        if not isinstance(selection, dict):
+            continue
+
+        criterion_id = _identifier_or_none(raw_criterion_id)
+        if criterion_id is None:
+            continue
+
+        criterion = criteria_by_id.get(criterion_id)
+        rating_id = _identifier_or_none(selection.get("rating_id"))
+        rating = _find_rubric_rating(criterion, rating_id)
+        resolved_criterion_id = (
+            _identifier_or_none(criterion.get("id")) if criterion is not None else criterion_id
+        )
+
+        rows.append(
+            {
+                "Assignment_ID": grade_row.get("Assignment_ID"),
+                "Assignment_Name": grade_row.get("Assignment_Name"),
+                "Student_ID": grade_row.get("Student_ID"),
+                "Student_Name": grade_row.get("Student_Name"),
+                "Student_Login_ID": grade_row.get("Student_Login_ID"),
+                "Grader_ID": grade_row.get("Grader_ID"),
+                "Grader_Name": grade_row.get("Grader_Name"),
+                "Grader_Login_ID": grade_row.get("Grader_Login_ID"),
+                "Grader_SIS_ID": grade_row.get("Grader_SIS_ID"),
+                "Grader_Type": grade_row.get("Grader_Type"),
+                "Criterion_ID": resolved_criterion_id,
+                "Criterion_Description": _rubric_criterion_description(criterion),
+                "Rating_ID": rating_id,
+                "Selected_Descriptor": _selected_rating_descriptor(rating, selection),
+                "Points": _coerce_score(selection.get("points")),
+                "Comments": selection.get("comments"),
+            }
+        )
+
+    return rows
+
+
+def _selected_rating_descriptor(
+    rating: dict[str, Any] | None,
+    selection: dict[str, Any],
+) -> str | None:
+    if rating is not None:
+        descriptor = _string_or_none(rating.get("description")) or _string_or_none(rating.get("long_description"))
+        if descriptor is not None:
+            return descriptor
+    return _string_or_none(selection.get("description")) or _string_or_none(selection.get("long_description"))
 
 
 def build_marker_statistics(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -233,7 +354,11 @@ def _resolve_xlsx_output_path(
     return output_path / file_name
 
 
-def _write_workbook(xlsx_path: Path, rows: list[dict[str, Any]]) -> None:
+def _write_workbook(
+    xlsx_path: Path,
+    rows: list[dict[str, Any]],
+    rubric_rows: list[dict[str, Any]] | None = None,
+) -> None:
     workbook = Workbook()
     workbook.calculation.fullCalcOnLoad = True
     workbook.calculation.forceFullCalc = True
@@ -243,6 +368,10 @@ def _write_workbook(xlsx_path: Path, rows: list[dict[str, Any]]) -> None:
 
     stats_sheet = workbook.create_sheet(title="Marker Statistics")
     _append_marker_statistics_rows(stats_sheet, build_marker_statistics(rows))
+
+    if rubric_rows is not None:
+        rubric_sheet = workbook.create_sheet(title="Rubric Assessments")
+        _append_sheet_rows(rubric_sheet, RUBRIC_ASSESSMENT_HEADERS, rubric_rows)
 
     workbook.save(xlsx_path)
 
