@@ -88,6 +88,21 @@ class CanvasApiClientStudentsTests(unittest.TestCase):
             },
         )
 
+    def test_list_course_groups_includes_member_users(self) -> None:
+        client = RecordingCanvasClient()
+
+        groups = client.list_course_groups(course_id=321)
+
+        self.assertEqual(groups, [])
+        self.assertEqual(client.last_path_or_url, "/api/v1/courses/321/groups")
+        self.assertEqual(
+            client.last_params,
+            {
+                "per_page": 100,
+                "include[]": ["users"],
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
