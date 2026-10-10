@@ -35,8 +35,8 @@ def _map_student_row(student: dict[str, Any], memberships: dict[int, str]) -> di
     return {
         "Student": _string_or_none(student.get("name")),
         "Email": _string_or_none(student.get("email")) or _string_or_none(student.get("login_id")),
-        "Student Number": _string_or_none(student.get("integration_id")),
-        "ID": _coerce_positive_int(student.get("sis_user_id")),
+        "Student Number": _string_or_none(student.get("sis_user_id")),
+        "ID": _coerce_positive_int(student.get("id")),
         "Groups": memberships.get(_coerce_positive_int(student.get("id")) or -1),
     }
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from http.client import HTTPException
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urljoin, urlparse
@@ -17,6 +18,14 @@ class CanvasAPIError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class CanvasTransportError(CanvasAPIError):
+    """Raised when a request transport failure may leave a mutation indeterminate."""
+
+    def __init__(self, message: str, *, request_may_have_succeeded: bool) -> None:
+        super().__init__(message)
+        self.request_may_have_succeeded = request_may_have_succeeded
 
 
 @dataclass(frozen=True)
@@ -94,6 +103,73 @@ class CanvasClient:
             params=params,
         )
         return self._expect_list(payload, "submissions")
+
+    def grade_submission(
+        self,
+        course_id: int,
+        assignment_id: int,
+        user_id: int,
+        *,
+        posted_grade: str | int | float | None = None,
+        submission_comment: str | None = None,
+        submission_comment_attempt: int | None = None,
+        rubric_assessment: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Grade or comment on one submission, optionally with rubric criteria."""
+        form_data: dict[str, Any] = {}
+        if posted_grade is not None:
+            form_data["submission[posted_grade]"] = posted_grade
+        if submission_comment is not None:
+            form_data["comment[text_comment]"] = submission_comment
+        if submission_comment_attempt is not None:
+            if submission_comment is None:
+                raise ValueError("A submission comment is required when setting a comment attempt.")
+            form_data["comment[attempt]"] = submission_comment_attempt
+        if rubric_assessment is not None:
+            for criterion_id, assessment in rubric_assessment.items():
+                if not isinstance(assessment, dict):
+                    raise ValueError(
+                        f"Rubric assessment for criterion '{criterion_id}' must be a mapping."
+                    )
+                for field in ("rating_id", "points", "comments"):
+                    value = assessment.get(field)
+                    if value is not None:
+                        form_data[f"rubric_assessment[{criterion_id}][{field}]"] = value
+
+        if not form_data:
+            raise ValueError("A submission grade, comment, or rubric assessment is required.")
+
+        response = self.request_json(
+            f"/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions/{user_id}",
+            method="PUT",
+            form_data=form_data,
+        )
+        if not isinstance(response.payload, dict):
+            raise CanvasTransportError(
+                "Canvas returned an unexpected response after updating a submission. "
+                "The update may have been applied.",
+                request_may_have_succeeded=True,
+            )
+        return response.payload
+
+    def get_submission(
+        self,
+        course_id: int,
+        assignment_id: int,
+        user_id: int,
+        *,
+        include_rubric_assessment: bool = False,
+    ) -> dict[str, Any]:
+        """Return one student's submission, optionally including its rubric assessment."""
+        params: dict[str, Any] | None = None
+        if include_rubric_assessment:
+            params = {"include[]": ["rubric_assessment"]}
+        response = self.request_json(
+            f"/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions/{user_id}",
+            method="GET",
+            params=params,
+        )
+        return self._expect_dict(response.payload, "submission")
 
     def list_course_students(self, course_id: int, *, active_only: bool = False) -> list[dict[str, Any]]:
         """Return course users with student enrollments."""
@@ -263,6 +339,83 @@ class CanvasClient:
             method="DELETE",
         )
 
+    def list_quizzes(self, course_id: int) -> list[dict[str, Any]]:
+        """Return all quizzes for a course."""
+        payload = self.get_paginated_json(
+            f"/api/v1/courses/{course_id}/quizzes",
+            params={"per_page": 100},
+        )
+        return self._expect_list(payload, "quizzes")
+
+    def get_quiz(self, course_id: int, quiz_id: int) -> dict[str, Any]:
+        """Return details for a specific quiz."""
+        response = self.request_json(
+            f"/api/v1/courses/{course_id}/quizzes/{quiz_id}",
+            method="GET",
+        )
+        return self._expect_dict(response.payload, "quiz")
+
+    def create_quiz(self, course_id: int, quiz_data: dict[str, Any]) -> dict[str, Any]:
+        """Create a new quiz in a course."""
+        form_data = {f"quiz[{key}]": value for key, value in quiz_data.items() if value is not None}
+        response = self.request_json(
+            f"/api/v1/courses/{course_id}/quizzes",
+            method="POST",
+            form_data=form_data,
+        )
+        return self._expect_dict(response.payload, "created quiz")
+
+    def delete_quiz(self, course_id: int, quiz_id: int) -> None:
+        """Delete a specific quiz."""
+        self.request_json(
+            f"/api/v1/courses/{course_id}/quizzes/{quiz_id}",
+            method="DELETE",
+        )
+
+    def update_quiz(self, course_id: int, quiz_id: int, quiz_data: dict[str, Any]) -> dict[str, Any]:
+        """Update an existing quiz in a course."""
+        form_data = {f"quiz[{key}]": value for key, value in quiz_data.items() if value is not None}
+        response = self.request_json(
+            f"/api/v1/courses/{course_id}/quizzes/{quiz_id}",
+            method="PUT",
+            form_data=form_data,
+        )
+        return self._expect_dict(response.payload, "updated quiz")
+
+    def list_quiz_questions(self, course_id: int, quiz_id: int) -> list[dict[str, Any]]:
+        """Return all questions for a specific quiz."""
+        payload = self.get_paginated_json(
+            f"/api/v1/courses/{course_id}/quizzes/{quiz_id}/questions",
+            params={"per_page": 100},
+        )
+        return self._expect_list(payload, "quiz questions")
+
+    def create_quiz_question(
+        self,
+        course_id: int,
+        quiz_id: int,
+        question_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create a question for a specific quiz."""
+        # Convert nested question dict to form data parameters
+        form_data: dict[str, Any] = {}
+        for key, value in question_data.items():
+            if key == "answers" and isinstance(value, list):
+                for idx, ans in enumerate(value):
+                    if isinstance(ans, dict):
+                        for ans_k, ans_v in ans.items():
+                            if ans_v is not None:
+                                form_data[f"question[answers][{idx}][{ans_k}]"] = ans_v
+            elif value is not None:
+                form_data[f"question[{key}]"] = value
+
+        response = self.request_json(
+            f"/api/v1/courses/{course_id}/quizzes/{quiz_id}/questions",
+            method="POST",
+            form_data=form_data,
+        )
+        return self._expect_dict(response.payload, "created quiz question")
+
     def get_paginated_json(
         self,
         path_or_url: str,
@@ -300,7 +453,8 @@ class CanvasClient:
         if encoded_form is not None:
             headers["Content-Type"] = "application/x-www-form-urlencoded"
 
-        request = Request(url=url, method=method.upper(), data=encoded_form, headers=headers)
+        request_method = method.upper()
+        request = Request(url=url, method=request_method, data=encoded_form, headers=headers)
 
         try:
             with urlopen(request, timeout=self.timeout) as response:
@@ -314,9 +468,20 @@ class CanvasClient:
                 status_code=exc.code,
             ) from exc
         except URLError as exc:
-            raise CanvasAPIError(f"Network error while contacting Canvas at {url}: {exc.reason}") from exc
-        except json.JSONDecodeError as exc:
-            raise CanvasAPIError(f"Canvas returned invalid JSON for {url}: {exc}") from exc
+            raise CanvasTransportError(
+                f"Network error while contacting Canvas at {url}: {exc.reason}",
+                request_may_have_succeeded=_request_may_have_succeeded(request_method),
+            ) from exc
+        except (TimeoutError, ConnectionError, OSError, HTTPException) as exc:
+            raise CanvasTransportError(
+                f"Network error while contacting Canvas at {url}: {exc}",
+                request_may_have_succeeded=_request_may_have_succeeded(request_method),
+            ) from exc
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CanvasTransportError(
+                f"Canvas returned an invalid response for {url}: {exc}",
+                request_may_have_succeeded=_request_may_have_succeeded(request_method),
+            ) from exc
 
     def _build_url(self, path_or_url: str, params: dict[str, Any] | None = None) -> str:
         if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
@@ -353,6 +518,11 @@ def _extract_next_link(link_header: str | None) -> str | None:
         if match.group(2) == "next":
             return match.group(1)
     return None
+
+
+def _request_may_have_succeeded(method: str) -> bool:
+    """Return whether a failed request could have changed Canvas state."""
+    return method not in {"GET", "HEAD", "OPTIONS"}
 
 
 def _format_http_error(url: str, status_code: int, reason: str, response_body: str) -> str:
