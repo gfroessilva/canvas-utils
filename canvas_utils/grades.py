@@ -316,6 +316,20 @@ def _resolve_assignment_records(
     include_rubric: bool = False,
 ) -> list[tuple[int, str, list[dict[str, Any]]]]:
     if assignment_id is not None:
+        if include_rubric:
+            rubric_assignment = client.get_assignment(
+                course_id=course_id,
+                assignment_id=assignment_id,
+                include_rubric=True,
+            )
+            raw_assignment_name = rubric_assignment.get("name")
+            assignment_name = (
+                raw_assignment_name.strip()
+                if isinstance(raw_assignment_name, str) and raw_assignment_name.strip()
+                else f"assignment-{assignment_id}"
+            )
+            return [(assignment_id, assignment_name, _extract_rubric_criteria(rubric_assignment))]
+
         assignments = client.list_assignments(course_id)
         matched_name: str | None = None
         for assignment in assignments:
@@ -325,17 +339,6 @@ def _resolve_assignment_records(
                 break
 
         assignment_name = matched_name or f"assignment-{assignment_id}"
-        if include_rubric:
-            rubric_assignment = client.get_assignment(
-                course_id=course_id,
-                assignment_id=assignment_id,
-                include_rubric=True,
-            )
-            name = _assignment_name(rubric_assignment)
-            if name == "assignment" and assignment_name != "assignment":
-                name = assignment_name
-            return [(assignment_id, name, _extract_rubric_criteria(rubric_assignment))]
-
         return [(assignment_id, assignment_name, [])]
 
     assignments = client.list_assignments(course_id, include_rubric=include_rubric)
@@ -404,7 +407,10 @@ def _sanitize_cell_value(val: Any) -> Any:
 def _append_sheet_rows(worksheet: Any, headers: list[str], rows: list[dict[str, Any]]) -> None:
     worksheet.append(headers)
     for row in rows:
-        worksheet.append([_sanitize_cell_value(row.get(header)) for header in headers])
+        worksheet.append([row.get(header) for header in headers])
+        for cell in worksheet[worksheet.max_row]:
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
 
 
 def _append_marker_statistics_rows(worksheet: Any, rows: list[dict[str, Any]]) -> None:
