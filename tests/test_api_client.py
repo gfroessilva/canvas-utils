@@ -21,6 +21,22 @@ class RecordingCanvasClient(CanvasClient):
         return []
 
 
+class GroupRecordingCanvasClient(CanvasClient):
+    def __init__(self) -> None:
+        super().__init__(base_url="https://canvas.example.edu", token="token")
+        self.calls: list[tuple[str, dict[str, object] | None]] = []
+
+    def get_paginated_json(
+        self,
+        path_or_url: str,
+        params: dict[str, object] | None = None,
+    ) -> list[object]:
+        self.calls.append((path_or_url, params))
+        if path_or_url == "/api/v1/courses/321/groups":
+            return [{"id": 44, "users": [{"id": 1}]}]
+        return [{"id": user_id} for user_id in range(1, 102)]
+
+
 class CanvasApiClientErrorFormattingTests(unittest.TestCase):
     def test_404_for_user_lookup_mentions_hidden_or_deleted_user(self) -> None:
         message = _format_http_error(
@@ -89,17 +105,17 @@ class CanvasApiClientStudentsTests(unittest.TestCase):
         )
 
     def test_list_course_groups_fetches_users_per_group(self) -> None:
-        client = RecordingCanvasClient()
+        client = GroupRecordingCanvasClient()
 
         groups = client.list_course_groups(course_id=321)
 
-        self.assertEqual(groups, [])
-        self.assertEqual(client.last_path_or_url, "/api/v1/courses/321/groups")
+        self.assertEqual(len(groups[0]["users"]), 101)
         self.assertEqual(
-            client.last_params,
-            {
-                "per_page": 100,
-            },
+            client.calls,
+            [
+                ("/api/v1/courses/321/groups", {"per_page": 100}),
+                ("/api/v1/groups/44/users", {"per_page": 100}),
+            ],
         )
 
 
