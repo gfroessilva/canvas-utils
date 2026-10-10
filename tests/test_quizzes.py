@@ -190,10 +190,11 @@ class TestQuizLoaders(unittest.TestCase):
 
 
 class TestQuizDeployment(unittest.TestCase):
-    def test_deploy_quiz_calls_client_methods(self):
+    def test_deploy_quiz_creates_draft_and_publishes_at_end(self):
         mock_client = MagicMock(spec=CanvasClient)
         mock_client.create_quiz.return_value = {"id": 999, "html_url": "https://canvas/quizzes/999"}
         mock_client.create_quiz_question.return_value = {"id": 1001}
+        mock_client.update_quiz.return_value = {"id": 999, "published": True}
 
         quiz_spec = QuizSpec(
             title="Deploy Test",
@@ -202,9 +203,12 @@ class TestQuizDeployment(unittest.TestCase):
                     name="Q1",
                     text="T/F Question",
                     question_type="true_false",
+                    general_feedback="General feedback note",
+                    correct_comments="Good job",
+                    incorrect_comments="Try again",
                     answers=[
-                        AnswerSpec(text="True", weight=100.0),
-                        AnswerSpec(text="False", weight=0.0),
+                        AnswerSpec(text="True", weight=100.0, comments="Correct explanation"),
+                        AnswerSpec(text="False", weight=0.0, comments="Incorrect explanation"),
                     ],
                 )
             ],
@@ -214,11 +218,84 @@ class TestQuizDeployment(unittest.TestCase):
 
         self.assertEqual(result["quiz_id"], 999)
         self.assertEqual(result["question_count"], 1)
+
+        # 1. Initial creation must be draft (published=False)
         mock_client.create_quiz.assert_called_once()
         create_quiz_args = mock_client.create_quiz.call_args[0]
         self.assertEqual(create_quiz_args[0], 42)
-        self.assertTrue(create_quiz_args[1]["published"])
+        self.assertFalse(create_quiz_args[1]["published"])
+
+        # 2. Check question feedback payload includes Canvas expected keys
         mock_client.create_quiz_question.assert_called_once()
+        q_args = mock_client.create_quiz_question.call_args[0]
+        q_payload = q_args[2]
+        self.assertEqual(q_payload["neutral_comments"], "General feedback note")
+        self.assertEqual(q_payload["neutral_comments_html"], "General feedback note")
+        self.assertEqual(q_payload["correct_comments_html"], "Good job")
+        self.assertEqual(q_payload["incorrect_comments_html"], "Try again")
+        self.assertEqual(q_payload["answers"][0]["answer_comments"], "Correct explanation")
+        self.assertEqual(q_payload["answers"][0]["answer_comment_html"], "Correct explanation")
+
+        # 3. Final publish update
+        mock_client.update_quiz.assert_called_once_with(42, 999, {"published": True})
+
+
+class TestCopilotEdgeCases(unittest.TestCase):
+    def test_excel_zero_points_preserved(self):
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws_q = wb.active
+        ws_q.title = "Questions"
+        ws_q.append(["Question_Name", "Question_Type", "Points", "Question_Text", "Choice_A", "Choice_B", "Correct_Answer"])
+        ws_q.append(["Q0", "multiple_choice", 0, "Zero point question", "Choice 1", "Choice 2", "A"])
+
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            temp_path = Path(f.name)
+
+        try:
+            wb.save(temp_path)
+            quiz = load_quiz_from_excel(temp_path)
+            self.assertEqual(quiz.questions[0].points_possible, 0.0)
+            self.assertEqual(quiz.total_points, 0.0)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    def test_excel_invalid_points_raises(self):
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws_q = wb.active
+        ws_q.title = "Questions"
+        ws_q.append(["Question_Name", "Question_Type", "Points", "Question_Text", "Choice_A", "Choice_B", "Correct_Answer"])
+        ws_q.append(["Q1", "multiple_choice", "not_a_number", "Question", "Choice 1", "Choice 2", "A"])
+
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            temp_path = Path(f.name)
+
+        try:
+            wb.save(temp_path)
+            with self.assertRaises(QuizValidationError):
+                load_quiz_from_excel(temp_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    def test_excel_unsupported_question_type_raises(self):
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws_q = wb.active
+        ws_q.title = "Questions"
+        ws_q.append(["Question_Name", "Question_Type", "Points", "Question_Text", "Choice_A", "Choice_B", "Correct_Answer"])
+        ws_q.append(["Q1", "unsupported_magic_type", 1.0, "Question", "Choice 1", "Choice 2", "A"])
+
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            temp_path = Path(f.name)
+
+        try:
+            wb.save(temp_path)
+            with self.assertRaises(QuizValidationError) as ctx:
+                load_quiz_from_excel(temp_path)
+            self.assertIn("Unsupported question type", str(ctx.exception))
+        finally:
+            temp_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

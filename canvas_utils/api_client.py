@@ -251,6 +251,16 @@ class CanvasClient:
             method="DELETE",
         )
 
+    def update_quiz(self, course_id: int, quiz_id: int, quiz_data: dict[str, Any]) -> dict[str, Any]:
+        """Update an existing quiz in a course."""
+        form_data = {f"quiz[{key}]": value for key, value in quiz_data.items() if value is not None}
+        response = self.request_json(
+            f"/api/v1/courses/{course_id}/quizzes/{quiz_id}",
+            method="PUT",
+            form_data=form_data,
+        )
+        return self._expect_dict(response.payload, "updated quiz")
+
     def list_quiz_questions(self, course_id: int, quiz_id: int) -> list[dict[str, Any]]:
         """Return all questions for a specific quiz."""
         payload = self.get_paginated_json(

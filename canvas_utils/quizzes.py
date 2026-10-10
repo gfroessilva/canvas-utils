@@ -24,8 +24,6 @@ SUPPORTED_QUESTION_TYPES = {
     "short_answer": "short_answer_question",
     "essay_question": "essay_question",
     "essay": "essay_question",
-    "numerical_question": "numerical_question",
-    "numerical": "numerical_question",
 }
 
 VALID_QUIZ_TYPES = {
@@ -47,9 +45,6 @@ class AnswerSpec:
     text: str
     weight: float = 0.0
     comments: str | None = None
-    numerical_answer_type: str | None = None
-    exact_value: float | None = None
-    margin: float | None = None
 
     def to_api_payload(self) -> dict[str, Any]:
         """Convert answer spec into Canvas question answer payload."""
@@ -58,13 +53,8 @@ class AnswerSpec:
             "answer_weight": self.weight,
         }
         if self.comments:
-            payload["answer_comment"] = self.comments
-        if self.numerical_answer_type:
-            payload["numerical_answer_type"] = self.numerical_answer_type
-            if self.exact_value is not None:
-                payload["answer_exact"] = self.exact_value
-            if self.margin is not None:
-                payload["answer_error_margin"] = self.margin
+            payload["answer_comments"] = self.comments
+            payload["answer_comment_html"] = self.comments
         return payload
 
 
@@ -139,10 +129,13 @@ class QuestionSpec:
         }
         if self.general_feedback:
             payload["neutral_comments"] = self.general_feedback
+            payload["neutral_comments_html"] = self.general_feedback
         if self.correct_comments:
             payload["correct_comments"] = self.correct_comments
+            payload["correct_comments_html"] = self.correct_comments
         if self.incorrect_comments:
             payload["incorrect_comments"] = self.incorrect_comments
+            payload["incorrect_comments_html"] = self.incorrect_comments
         return payload
 
 
@@ -212,25 +205,41 @@ def load_quiz_from_dict(data: dict[str, Any]) -> QuizSpec:
     questions_data = data.get("questions") or []
     questions: list[QuestionSpec] = []
 
-    for q_dict in questions_data:
+    for idx, q_dict in enumerate(questions_data, start=1):
         answers_data = q_dict.get("answers") or []
-        answers = [
-            AnswerSpec(
-                text=str(a.get("text", "")),
-                weight=float(a.get("weight", 0.0)),
-                comments=a.get("comments"),
-                numerical_answer_type=a.get("numerical_answer_type"),
-                exact_value=float(a["exact_value"]) if "exact_value" in a and a["exact_value"] is not None else None,
-                margin=float(a["margin"]) if "margin" in a and a["margin"] is not None else None,
+        answers: list[AnswerSpec] = []
+        for a_idx, a in enumerate(answers_data, start=1):
+            try:
+                weight = float(a.get("weight", 0.0))
+            except (ValueError, TypeError) as exc:
+                raise QuizValidationError(
+                    f"Question #{idx} ('{q_dict.get('name', 'Question')}') answer #{a_idx}: "
+                    f"weight must be a valid number, got {a.get('weight')!r}."
+                ) from exc
+
+            answers.append(
+                AnswerSpec(
+                    text=str(a.get("text", "")),
+                    weight=weight,
+                    comments=a.get("comments"),
+                )
             )
-            for a in answers_data
-        ]
+
+        try:
+            points_val = q_dict.get("points_possible", 1.0)
+            points_possible = float(points_val) if points_val is not None else 1.0
+        except (ValueError, TypeError) as exc:
+            raise QuizValidationError(
+                f"Question #{idx} ('{q_dict.get('name', 'Question')}'): "
+                f"points_possible must be a valid number, got {q_dict.get('points_possible')!r}."
+            ) from exc
+
         questions.append(
             QuestionSpec(
                 name=str(q_dict.get("name", "Question")),
                 text=str(q_dict.get("text", "")),
                 question_type=str(q_dict.get("type") or q_dict.get("question_type", "multiple_choice_question")),
-                points_possible=float(q_dict.get("points_possible", 1.0)),
+                points_possible=points_possible,
                 answers=answers,
                 general_feedback=q_dict.get("general_feedback"),
                 correct_comments=q_dict.get("correct_comments"),
@@ -238,13 +247,25 @@ def load_quiz_from_dict(data: dict[str, Any]) -> QuizSpec:
             )
         )
 
+    try:
+        raw_time_limit = data.get("time_limit")
+        time_limit = int(raw_time_limit) if raw_time_limit is not None and str(raw_time_limit).strip() != "" else None
+    except (ValueError, TypeError) as exc:
+        raise QuizValidationError(f"Quiz 'time_limit' must be an integer, got {data.get('time_limit')!r}.") from exc
+
+    try:
+        raw_attempts = data.get("allowed_attempts", 1)
+        allowed_attempts = int(raw_attempts) if raw_attempts is not None and str(raw_attempts).strip() != "" else 1
+    except (ValueError, TypeError) as exc:
+        raise QuizValidationError(f"Quiz 'allowed_attempts' must be an integer, got {data.get('allowed_attempts')!r}.") from exc
+
     quiz = QuizSpec(
         title=str(data.get("title", "")),
         description=str(data.get("description", "")),
         quiz_type=str(data.get("quiz_type", "assignment")),
-        time_limit=int(data["time_limit"]) if data.get("time_limit") is not None else None,
+        time_limit=time_limit,
         shuffle_answers=bool(data.get("shuffle_answers", True)),
-        allowed_attempts=int(data.get("allowed_attempts", 1)),
+        allowed_attempts=allowed_attempts,
         scoring_policy=str(data.get("scoring_policy", "keep_highest")),
         show_correct_answers=bool(data.get("show_correct_answers", True)),
         published=bool(data.get("published", False)),
@@ -291,13 +312,20 @@ def load_quiz_from_excel(path: str | Path) -> QuizSpec:
     title = str(settings.get("title") or p.stem)
     description = str(settings.get("description") or "")
     quiz_type = str(settings.get("quiz_type") or "assignment")
-    time_limit = int(settings["time_limit"]) if settings.get("time_limit") is not None and str(settings["time_limit"]).strip() != "" else None
+    try:
+        raw_time_limit = settings.get("time_limit")
+        time_limit = int(raw_time_limit) if raw_time_limit is not None and str(raw_time_limit).strip() != "" else None
+    except (ValueError, TypeError) as exc:
+        raise QuizValidationError(f"Excel settings: 'time_limit' must be an integer, got {settings.get('time_limit')!r}.") from exc
     
     shuffle_val = settings.get("shuffle_answers")
     shuffle_answers = True if shuffle_val is None else (str(shuffle_val).strip().upper() not in {"FALSE", "0", "NO"})
 
-    attempts_val = settings.get("allowed_attempts")
-    allowed_attempts = int(attempts_val) if attempts_val is not None and str(attempts_val).strip() != "" else 1
+    try:
+        attempts_val = settings.get("allowed_attempts")
+        allowed_attempts = int(attempts_val) if attempts_val is not None and str(attempts_val).strip() != "" else 1
+    except (ValueError, TypeError) as exc:
+        raise QuizValidationError(f"Excel settings: 'allowed_attempts' must be an integer, got {settings.get('allowed_attempts')!r}.") from exc
 
     scoring_policy = str(settings.get("scoring_policy") or "keep_highest")
     
@@ -332,12 +360,29 @@ def load_quiz_from_excel(path: str | Path) -> QuizSpec:
 
         q_name = get_cell(row_vals, "question_name") or get_cell(row_vals, "name") or f"Question {r_idx - 1}"
         q_text = get_cell(row_vals, "question_text") or get_cell(row_vals, "text") or ""
-        q_type_raw = str(get_cell(row_vals, "question_type") or get_cell(row_vals, "type") or "multiple_choice").strip()
-        points_raw = get_cell(row_vals, "points") or get_cell(row_vals, "points_possible") or 1.0
-        try:
-            points = float(points_raw)
-        except (ValueError, TypeError):
+        q_type_raw = str(get_cell(row_vals, "question_type") or get_cell(row_vals, "type") or "").strip()
+        if not q_type_raw:
+            q_type_raw = "multiple_choice"
+
+        norm_type = SUPPORTED_QUESTION_TYPES.get(q_type_raw.lower())
+        if not norm_type:
+            raise QuizValidationError(
+                f"Row {r_idx} ('{q_name}'): Unsupported question type '{q_type_raw}'. "
+                f"Supported types: {', '.join(sorted(set(SUPPORTED_QUESTION_TYPES.values())))}"
+            )
+
+        points_raw = get_cell(row_vals, "points")
+        if points_raw is None:
+            points_raw = get_cell(row_vals, "points_possible")
+        if points_raw is None or str(points_raw).strip() == "":
             points = 1.0
+        else:
+            try:
+                points = float(points_raw)
+            except (ValueError, TypeError) as exc:
+                raise QuizValidationError(
+                    f"Row {r_idx} ('{q_name}'): Points value must be a valid number, got {points_raw!r}."
+                ) from exc
 
         general_feedback = get_cell(row_vals, "general_feedback") or get_cell(row_vals, "feedback")
         correct_answer_raw = str(get_cell(row_vals, "correct_answer") or "").strip()
@@ -350,7 +395,6 @@ def load_quiz_from_excel(path: str | Path) -> QuizSpec:
                 choices.append((letter, str(val).strip()))
 
         answers: list[AnswerSpec] = []
-        norm_type = SUPPORTED_QUESTION_TYPES.get(q_type_raw.lower(), "multiple_choice_question")
 
         if norm_type == "true_false_question":
             is_true_correct = correct_answer_raw.upper() in {"TRUE", "T", "YES", "1"}
@@ -632,8 +676,8 @@ def deploy_quiz(
     quiz_spec.validate()
 
     quiz_payload = quiz_spec.to_api_payload()
-    if publish:
-        quiz_payload["published"] = True
+    # Always create initial container as draft (unpublished) to prevent partial quizzes from being visible
+    quiz_payload["published"] = False
 
     # 1. Create quiz container
     created_quiz = client.create_quiz(course_id, quiz_payload)
@@ -643,11 +687,22 @@ def deploy_quiz(
 
     created_questions: list[dict[str, Any]] = []
 
-    # 2. Upload questions sequentially
-    for q_idx, q_spec in enumerate(quiz_spec.questions, start=1):
-        q_payload = q_spec.to_api_payload()
-        created_q = client.create_quiz_question(course_id, quiz_id, q_payload)
-        created_questions.append(created_q)
+    # 2. Upload questions sequentially with error tracking
+    try:
+        for q_idx, q_spec in enumerate(quiz_spec.questions, start=1):
+            q_payload = q_spec.to_api_payload()
+            created_q = client.create_quiz_question(course_id, quiz_id, q_payload)
+            created_questions.append(created_q)
+    except Exception as exc:
+        raise CanvasAPIError(
+            f"Failed uploading question #{q_idx} ('{q_spec.name}') to quiz #{quiz_id}. "
+            f"The quiz was left as an unpublished draft with {len(created_questions)}/{len(quiz_spec.questions)} questions. "
+            f"Root error: {exc}"
+        ) from exc
+
+    # 3. Publish quiz at the end if requested
+    if publish or quiz_spec.published:
+        created_quiz = client.update_quiz(course_id, quiz_id, {"published": True})
 
     return {
         "quiz": created_quiz,

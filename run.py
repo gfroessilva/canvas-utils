@@ -214,7 +214,7 @@ def _run_quiz_command(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
                 return 1
-        except (QuizValidationError, FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+        except (QuizValidationError, ValueError, TypeError, FileNotFoundError, json.JSONDecodeError, OSError) as exc:
             print(f"Error validating quiz file: {exc}", file=sys.stderr)
             return 1
 
