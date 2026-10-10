@@ -887,9 +887,12 @@ def _prewrite_conflict(
         _submission_grade(current_submission),
     ):
         return "the grade changed in Canvas after preflight"
-    if change.submission_comment is not None and not _same_submission_state(
-        baseline.submission,
-        current_submission,
+    if (
+        (change.submission_comment is not None or bool(change.rubric_assessment))
+        and not _same_submission_state(
+            baseline.submission,
+            current_submission,
+        )
     ):
         return "the submission changed in Canvas after preflight"
     for criterion_id in change.rubric_assessment:
@@ -1193,6 +1196,16 @@ def _write_instructions_sheet(worksheet: Any, assignment: dict[str, Any]) -> Non
     worksheet.sheet_view.showGridLines = False
 
 
+def _sanitize_cell_value(val: Any) -> Any:
+    if isinstance(val, str) and val.startswith("="):
+        return f"'{val}"
+    return val
+
+
+def _append_sheet_row(worksheet: Any, row: Iterable[Any]) -> None:
+    worksheet.append([_sanitize_cell_value(cell) for cell in row])
+
+
 def _write_grades_sheet(
     workbook: Workbook,
     submissions_by_user: dict[int, dict[str, Any]],
@@ -1201,7 +1214,8 @@ def _write_grades_sheet(
     worksheet.append(GRADE_HEADERS)
     for user_id, submission in submissions_by_user.items():
         user = _submission_user(submission)
-        worksheet.append(
+        _append_sheet_row(
+            worksheet,
             [
                 user_id,
                 user.get("name"),
@@ -1211,7 +1225,7 @@ def _write_grades_sheet(
                 "KEEP",
                 None,
                 "KEEP",
-            ]
+            ],
         )
     _format_table(worksheet)
     _shade_read_only_columns(worksheet, ("A", "B", "C", "D"))
@@ -1243,7 +1257,8 @@ def _write_rubric_sheet(
                 else rubric_rating_description(current_rating)
                 or _text_or_none(selection.get("description"))
             )
-            worksheet.append(
+            _append_sheet_row(
+                worksheet,
                 [
                     user_id,
                     user.get("name"),
@@ -1257,7 +1272,7 @@ def _write_rubric_sheet(
                     None,
                     None,
                     "KEEP",
-                ]
+                ],
             )
             rows_by_criterion.setdefault(criterion_id, []).append(worksheet.max_row)
     _format_table(worksheet)
@@ -1274,7 +1289,8 @@ def _write_rubric_catalog_sheet(
     worksheet.append(RUBRIC_CATALOG_HEADERS)
     for choices in rating_catalog.values():
         for choice in choices:
-            worksheet.append(
+            _append_sheet_row(
+                worksheet,
                 [
                     choice.criterion_id,
                     choice.criterion_description,
@@ -1282,7 +1298,7 @@ def _write_rubric_catalog_sheet(
                     choice.selection_label,
                     choice.descriptor,
                     choice.points,
-                ]
+                ],
             )
     _format_table(worksheet)
     _shade_read_only_columns(worksheet, ("A", "B", "C", "D", "E", "F"))
@@ -1306,7 +1322,7 @@ def _write_mapping_sheet(workbook: Workbook) -> None:
         ("rubric.action", RUBRIC_SHEET, "Action"),
     ]
     for row in rows:
-        worksheet.append(row)
+        _append_sheet_row(worksheet, row)
     _format_table(worksheet)
 
 
@@ -1331,7 +1347,7 @@ def _write_metadata_sheet(
         ("Rubric_Fingerprint", rubric_fingerprint(rubric_criteria)),
         ("Template_Created_At", datetime.now().astimezone().isoformat(timespec="seconds")),
     ):
-        worksheet.append(row)
+        _append_sheet_row(worksheet, row)
     _format_table(worksheet)
 
 
@@ -1344,7 +1360,8 @@ def _write_snapshot_sheet(
     worksheet = workbook.create_sheet(title=SNAPSHOT_SHEET)
     worksheet.append(SNAPSHOT_HEADERS)
     for user_id, submission in submissions_by_user.items():
-        worksheet.append(
+        _append_sheet_row(
+            worksheet,
             (
                 "grade",
                 user_id,
@@ -1355,14 +1372,15 @@ def _write_snapshot_sheet(
                 None,
                 None,
                 None,
-            )
+            ),
         )
         for criterion in rubric_criteria:
             criterion_id = identifier_or_none(criterion.get("id"))
             if criterion_id is None:
                 continue
             selection = _submission_rubric_selection(submission, criterion_id)
-            worksheet.append(
+            _append_sheet_row(
+                worksheet,
                 (
                     "rubric",
                     user_id,
@@ -1373,7 +1391,7 @@ def _write_snapshot_sheet(
                     selection.get("rating_id"),
                     selection.get("points"),
                     selection.get("comments"),
-                )
+                ),
             )
     _format_table(worksheet)
 
@@ -1389,7 +1407,11 @@ def _write_rubric_lists_sheet(
             continue
         worksheet.cell(row=1, column=column_number, value=criterion_id)
         for row_number, choice in enumerate(choices, start=2):
-            worksheet.cell(row=row_number, column=column_number, value=choice.selection_label)
+            worksheet.cell(
+                row=row_number,
+                column=column_number,
+                value=_sanitize_cell_value(choice.selection_label),
+            )
         range_name = f"RubricChoices{column_number}"
         column_letter = get_column_letter(column_number)
         reference = f"'{RUBRIC_LISTS_SHEET}'!${column_letter}$2:${column_letter}${len(choices) + 1}"
@@ -1576,6 +1598,7 @@ def _resolve_mapped_table(
     worksheet = _required_sheet(workbook, sheet_name)
     headers = _header_index(worksheet)
     columns: dict[str, int] = {}
+    seen_columns: dict[int, str] = {}
     for field, mapping in table_mappings.items():
         column_number = headers.get(mapping.column_name.casefold())
         if column_number is None:
@@ -1584,6 +1607,13 @@ def _resolve_mapped_table(
                 f"'{mapping.column_name}' on sheet '{sheet_name}'."
             )
             continue
+        if column_number in seen_columns:
+            errors.append(
+                f"{MAPPING_SHEET} maps multiple fields ('{seen_columns[column_number]}' and '{field}') "
+                f"to the same column '{mapping.column_name}' on sheet '{sheet_name}'."
+            )
+            continue
+        seen_columns[column_number] = field
         columns[field] = column_number
     if errors:
         raise GradebookValidationError(errors)
@@ -1925,6 +1955,15 @@ def _validate_snapshot_conflicts(
             continue
         submission = submissions_by_user.get(rubric_input.user_id)
         if submission is None:
+            continue
+        expected_submission = snapshot.submissions.get(rubric_input.user_id)
+        if expected_submission is not None and not _same_submission_state(
+            expected_submission, submission
+        ):
+            errors.append(
+                f"Rubric row {rubric_input.source_row} cannot be uploaded because the student's "
+                "submission changed in Canvas after this template was created."
+            )
             continue
         current = _submission_rubric_selection(submission, rubric_input.criterion_id)
         current_snapshot = _RubricSnapshot(

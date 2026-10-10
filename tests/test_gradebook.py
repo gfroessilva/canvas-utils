@@ -426,6 +426,43 @@ class GradebookTests(unittest.TestCase):
         self.assertEqual(client.grade_requests, [])
         self.assertEqual(client.single_submission_requests[-1], (123, 101, 8, False))
 
+    def test_execute_rechecks_rubric_only_submission_before_writing(self) -> None:
+        client = FakeGradebookClient()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gradebook_path = create_gradebook_template(
+                client=client,
+                course_id=123,
+                assignment_id=101,
+                output=Path(temp_dir),
+            )
+            workbook = load_workbook(gradebook_path)
+            rubric = workbook[RUBRIC_SHEET]
+            rubric["H2"] = "5 - Excellent"
+            rubric["L2"] = "SET"
+            workbook.save(gradebook_path)
+            plan = build_gradebook_plan(
+                client=client,
+                course_id=123,
+                assignment_id=101,
+                input_path=gradebook_path,
+            )
+            client.submissions[0]["attempt"] = 2
+            client.submissions[0]["submitted_at"] = "2026-09-11T10:00:00Z"
+            journal = GradebookUploadJournal.load(default_gradebook_upload_journal_path(gradebook_path))
+
+            result = apply_gradebook_plan(
+                client=client,
+                plan=plan,
+                execute=True,
+                upload_journal=journal,
+            )
+
+        self.assertEqual(result.applied, 0)
+        self.assertEqual(result.conflicted, 1)
+        self.assertEqual(client.grade_requests, [])
+        self.assertEqual(client.single_submission_requests[-1], (123, 101, 7, True))
+
     def test_indeterminate_comment_is_journaled_and_not_replayed_by_default(self) -> None:
         client = FakeGradebookClient()
 
@@ -694,6 +731,94 @@ class GradebookTests(unittest.TestCase):
         self.assertTrue(upload_args.execute)
         self.assertEqual(upload_args.journal, "journal.json")
         self.assertTrue(upload_args.retry_indeterminate)
+
+    def test_mapping_rejects_duplicate_target_columns(self) -> None:
+        client = FakeGradebookClient()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gradebook_path = create_gradebook_template(
+                client=client,
+                course_id=123,
+                assignment_id=101,
+                output=Path(temp_dir),
+            )
+            workbook = load_workbook(gradebook_path)
+            mapping_sheet = workbook["Canvas Mapping"]
+            # Row 5 is grades.submission_comment -> New_Submission_Comment
+            # Change its target column to New_Grade (which row 3 grades.new_grade already targets)
+            mapping_sheet["C5"] = "New_Grade"
+            workbook.save(gradebook_path)
+
+            with self.assertRaisesRegex(GradebookValidationError, "maps multiple fields .* to the same column"):
+                build_gradebook_plan(
+                    client=client,
+                    course_id=123,
+                    assignment_id=101,
+                    input_path=gradebook_path,
+                )
+
+    def test_create_gradebook_template_sanitizes_formula_injection(self) -> None:
+        class FakeFormulaGradebookClient(FakeGradebookClient):
+            def list_submissions(
+                self,
+                course_id: int,
+                assignment_id: int,
+                include_user: bool = True,
+                *,
+                include_rubric_assessment: bool = False,
+            ) -> list[dict[str, object]]:
+                return [
+                    {
+                        "assignment_id": assignment_id,
+                        "user_id": 7,
+                        "score": 10,
+                        "grade": "=1+1",
+                        "workflow_state": "graded",
+                        "user": {"name": "=SUM(A1:A5)", "login_id": "=cmd|' /C calc'!A0"},
+                        "rubric_assessment": {},
+                    }
+                ]
+
+        client = FakeFormulaGradebookClient()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gradebook_path = create_gradebook_template(
+                client=client,
+                course_id=123,
+                assignment_id=101,
+                output=Path(temp_dir),
+            )
+            workbook = load_workbook(gradebook_path, data_only=False)
+            grades = workbook[GRADES_SHEET]
+            self.assertEqual(grades["B2"].value, "'=SUM(A1:A5)")
+            self.assertEqual(grades["C2"].value, "'=cmd|' /C calc'!A0")
+            self.assertEqual(grades["D2"].value, "'=1+1")
+
+    def test_plan_rejects_rubric_upload_when_submission_attempt_changes(self) -> None:
+        client = FakeGradebookClient()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            gradebook_path = create_gradebook_template(
+                client=client,
+                course_id=123,
+                assignment_id=101,
+                output=Path(temp_dir),
+            )
+            workbook = load_workbook(gradebook_path)
+            rubric = workbook[RUBRIC_SHEET]
+            rubric["H2"] = "5 - Excellent"
+            rubric["L2"] = "SET"
+            workbook.save(gradebook_path)
+
+            # Change submission attempt in client
+            client.submissions[0]["attempt"] = 2
+
+            with self.assertRaisesRegex(GradebookValidationError, "submission changed in Canvas after this template was created"):
+                build_gradebook_plan(
+                    client=client,
+                    course_id=123,
+                    assignment_id=101,
+                    input_path=gradebook_path,
+                )
 
 
 if __name__ == "__main__":

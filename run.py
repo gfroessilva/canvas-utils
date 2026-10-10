@@ -11,6 +11,7 @@ from typing import Any
 
 from canvas_utils.api_client import CanvasAPIError, CanvasClient
 from canvas_utils.cleanup import cleanup_course_resources, resolve_cleanup_targets
+from canvas_utils.grades import export_assignment_grades
 from canvas_utils.gradebook import (
     GradebookUploadLock,
     GradebookUploadJournal,
