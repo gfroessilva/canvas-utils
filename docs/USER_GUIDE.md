@@ -24,8 +24,9 @@
 | `gradebook` | Creates, validates, and uploads controlled gradebook workbooks. | One XLSX template, validation output, or guarded submission updates. |
 | `students` | Exports the student roster and group memberships. | One XLSX workbook per course. |
 | `cleanup` | Lists or deletes selected course resources. | Progress messages and a per-target summary. |
+| `quiz` | Creates starter templates and programmatically deploys quizzes to Canvas. | One XLSX or JSON authoring template, or created Canvas quiz with questions. |
 
-The export commands only read Canvas data. `gradebook upload` and `cleanup --execute` change Canvas data; gradebook upload is intentionally protected by a dry-run default.
+The export commands only read Canvas data. `gradebook upload`, `cleanup --execute`, and `quiz create` change Canvas data; gradebook upload is intentionally protected by a dry-run default, cleanup requires `--execute`, and `quiz create` supports `--dry-run`.
 
 ## Requirements and installation
 
@@ -286,6 +287,52 @@ Supported targets are `pages`, `assessments`, `modules`, `files`, `discussions`,
 
 Each target is processed progressively. A failure for one resource is reported and does not prevent later resources in the same target from being attempted. The command exits with a nonzero status after `--execute` if any resource failed.
 
+### `quiz`
+
+Author, validate, and programmatically create Canvas quizzes from Excel (`.xlsx`) workbooks or JSON files using the Canvas Classic Quizzes API.
+
+```text
+python run.py quiz template [--output PATH]
+python run.py quiz create --course COURSE_ID --input FILE [--publish] [--dry-run]
+```
+
+Examples:
+
+```powershell
+# Generate a starter authoring template (Excel or JSON determined by file extension)
+python .\run.py quiz template --output .\exports\quiz_template.xlsx
+python .\run.py quiz template --output .\exports\quiz_template.json
+
+# Validate quiz structure, question format, and answers without calling Canvas API
+python .\run.py quiz create --course 12345 --input .\exports\quiz_template.xlsx --dry-run
+
+# Deploy quiz container and all questions to Canvas (creates as draft)
+python .\run.py quiz create --course 12345 --input .\exports\quiz_template.xlsx
+
+# Deploy and immediately publish the quiz
+python .\run.py quiz create --course 12345 --input .\exports\quiz_template.xlsx --publish
+```
+
+#### Template formats
+
+- **Excel (`.xlsx`)**:
+  - `Settings` sheet: Contains quiz-level metadata: `title`, `description` (HTML supported), `quiz_type` (`assignment`, `practice_quiz`, `graded_survey`, `survey`), `time_limit` (minutes or empty for untimed), `shuffle_answers` (`TRUE`/`FALSE`), `allowed_attempts` (`1` or `-1` for unlimited), `scoring_policy` (`keep_highest`, `keep_latest`), `show_correct_answers` (`TRUE`/`FALSE`), and `published` (`TRUE`/`FALSE`).
+  - `Questions` sheet: Columns `Question_Name`, `Question_Type`, `Points`, `Question_Text`, `Choice_A` through `Choice_D` (or up to `Choice_H`), `Correct_Answer`, and `General_Feedback`.
+- **JSON (`.json`)**:
+  - Object specifying quiz metadata (`title`, `description`, `quiz_type`, `time_limit`, `shuffle_answers`, `allowed_attempts`, `scoring_policy`, `show_correct_answers`, `published`) and a `questions` array containing question objects (`name`, `text`, `type`, `points_possible`, `general_feedback`, `correct_comments`, `incorrect_comments`, and `answers`).
+
+#### Supported question types
+
+| Question type | Aliases | Answer formatting in Excel |
+| --- | --- | --- |
+| `multiple_choice_question` | `multiple_choice` | Enter choices across `Choice_A`..`Choice_D`, specify single correct choice letter (e.g., `C`) or choice text in `Correct_Answer`. |
+| `true_false_question` | `true_false` | Specify `True` or `False` in `Correct_Answer`. |
+| `multiple_answers_question` | `multiple_answers` | Enter choices across `Choice_A`..`Choice_D`, specify comma-separated correct choice letters (e.g., `A, C`) in `Correct_Answer`. |
+| `short_answer_question` | `short_answer` | Comma- or semicolon-separated list of acceptable answer strings in `Correct_Answer`. |
+| `essay_question` | `essay` | Open-ended question; `Correct_Answer` may be left blank. |
+
+Quizzes are always created as unpublished drafts during question upload. If an error occurs halfway through question creation, the quiz is left as an unpublished draft with partial questions for inspection. If `--publish` is specified, the quiz is published only after all questions are successfully uploaded.
+
 ## Output reference
 
 ### Generated filenames
@@ -296,6 +343,7 @@ Each target is processed progressively. A failure for one resource is reported a
 | `grades` | `canvas_grades_<assignment-id>_<assignment-name>_<YYYY-MM-DD>.xlsx` |
 | `gradebook template` | `canvas_gradebook_<assignment-id>_<assignment-name>_<YYYY-MM-DD>.xlsx` |
 | `students` | `canvas_students_<course-id>_<YYYY-MM-DD>.xlsx` |
+| `quiz template` | `quiz_template.xlsx` or `quiz_template.json` (or user-supplied `--output` path) |
 
 When a single-assignment `--output` path ends in the expected extension, the supplied filename is used instead.
 
@@ -393,7 +441,7 @@ The command does not delete assignment-linked calendar events through the `calen
 
 ## Canvas access
 
-Canvas decides what a token can see and modify according to the token owner's role and course permissions. Export commands generally require permission to read the course, assignments, submissions, users, and groups involved. Grade exports may need permission to view submission grades, grader identities, rubrics, and rubric assessments. Gradebook template and validation require the same assignment and submission access; upload also requires permission to grade or comment on every targeted submission. Cleanup requires the corresponding delete or course-update permission for every selected target.
+Canvas decides what a token can see and modify according to the token owner's role and course permissions. Export commands generally require permission to read the course, assignments, submissions, users, and groups involved. Grade exports may need permission to view submission grades, grader identities, rubrics, and rubric assessments. Gradebook template and validation require the same assignment and submission access; upload also requires permission to grade or comment on every targeted submission. Cleanup requires the corresponding delete or course-update permission for every selected target. Quiz authoring and deployment requires permission to create, edit, and publish quizzes and quiz questions in the course.
 
 The client follows Canvas pagination links, so an export or cleanup includes all pages returned by the API, rather than only the first 100 records.
 
@@ -412,6 +460,7 @@ The client follows Canvas pagination links, so an export or cleanup includes all
 | `Gradebook validation failed` | Correct the listed workbook action, identifier, descriptor, mapping, or Canvas conflict before retrying. |
 | Rubric changed since template creation | Generate a fresh `gradebook template`, then re-enter or transfer the intended changes. |
 | Another gradebook upload is already using lock | Wait for the other upload using this workbook's journal to finish. |
+| `QuizValidationError` | Review question formatting, ensure choice letters match available options, and verify required fields. |
 | Unsupported field or target | Use the field and target names listed in this guide. |
 
 Run `python run.py --help` or `python run.py <subcommand> --help` to see the CLI's current arguments.

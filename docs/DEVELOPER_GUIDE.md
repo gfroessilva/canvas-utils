@@ -47,6 +47,7 @@ There is no persistent database, background worker, or state file. Every command
 | `canvas_utils/gradebook.py` | Controlled gradebook template, validation, conflict detection, and upload workflow. |
 | `canvas_utils/rubrics.py` | Shared Canvas rubric extraction, identifier normalization, and rating lookup helpers. |
 | `canvas_utils/students.py` | Student-roster XLSX export and group-membership mapping. |
+| `canvas_utils/quizzes.py` | Data structures, parsers (Excel/JSON), validation, and deployment workflow for Canvas Quizzes. |
 | `canvas_utils/cleanup.py` | Dry-run and progressive destructive cleanup workflows. |
 | `canvas_utils/cohort.py` | Reserved placeholder for future cohort analytics; it has no implementation yet. |
 | `tests/` | Unit tests using fake Canvas clients and local temporary output files. |
@@ -67,6 +68,8 @@ There is no persistent database, background worker, or state file. Every command
 | `gradebook upload` | `_run_gradebook_command` | `build_gradebook_plan` and `apply_gradebook_plan` |
 | `students` | `_run_students_command` | `export_course_students` |
 | `cleanup` | `_run_cleanup_command` | `cleanup_course_resources` |
+| `quiz template` | `_run_quiz_command` | `create_quiz_template` |
+| `quiz create` | `_run_quiz_command` | `load_quiz_from_file` and `deploy_quiz` |
 
 Each handler:
 
@@ -132,6 +135,18 @@ client.get_course(course_id, include_syllabus_body=False)
 client.update_course(course_id, updates)
 client.list_calendar_events(course_id)
 client.delete_calendar_event(event_id)
+```
+
+And methods for quizzes and quiz questions:
+
+```python
+client.list_quizzes(course_id)
+client.get_quiz(course_id, quiz_id)
+client.create_quiz(course_id, quiz_data)
+client.delete_quiz(course_id, quiz_id)
+client.update_quiz(course_id, quiz_id, quiz_data)
+client.list_quiz_questions(course_id, quiz_id)
+client.create_quiz_question(course_id, quiz_id, question_data)
 ```
 
 `CanvasAPIError` is the domain exception for HTTP errors and unexpected Canvas response shapes. It carries an optional `status_code`, which grade export uses to distinguish a 404 user lookup from other failures. `CanvasTransportError` is its subclass for network or malformed-response failures and identifies whether a mutation may already have reached Canvas.
@@ -238,6 +253,31 @@ The handlers deliberately catch `CanvasAPIError` around individual mutation requ
 
 `calendar` excludes assignment-linked events. `syllabus` clears only a nonempty `syllabus_body`. The rest of the targets list and delete their corresponding Canvas resources.
 
+### `canvas_utils.quizzes`
+
+Data structures, parsers, and deployment workflows for programmatically authoring and uploading quizzes via the Canvas Classic Quizzes API.
+
+Key data models include:
+
+- `QuizSpec`: Represents quiz-level configuration (`title`, `description`, `quiz_type`, `time_limit`, `shuffle_answers`, `allowed_attempts`, `scoring_policy`, `show_correct_answers`, `published`, `questions`).
+- `QuestionSpec`: Represents an individual question (`name`, `text`, `question_type`, `points_possible`, `answers`, `general_feedback`, `correct_comments`, `incorrect_comments`).
+- `AnswerSpec`: Represents an individual answer choice (`text`, `weight`, `comments`).
+- `QuizValidationError`: Subclass of `ValueError` raised when quiz structure or question options fail validation.
+
+Key public functions:
+
+```python
+create_quiz_template(output_path)
+create_quiz_template_excel(output_path)
+create_quiz_template_json(output_path)
+load_quiz_from_file(input_path)
+load_quiz_from_excel(path)
+load_quiz_from_json(path)
+deploy_quiz(client, course_id, quiz_spec, publish=False)
+```
+
+`deploy_quiz` creates the quiz container as an unpublished draft first, then uploads questions sequentially via `create_quiz_question`. If question creation fails partway through, the operation raises `CanvasAPIError` reporting the exact failed question and leaving the quiz unpublished with the partial questions for troubleshooting. If publishing is requested, the quiz is published via `update_quiz` only after all questions succeed.
+
 ### `run.py`
 
 `run.py` is the executable boundary. It should remain responsible for:
@@ -270,6 +310,7 @@ The currently used endpoint families are:
 | Discussions and announcements | `/courses/{course_id}/discussion_topics` |
 | Course and syllabus | `/courses/{course_id}` |
 | Calendar events | `/calendar_events` scoped by `context_codes[]=course_{course_id}` |
+| Quizzes and quiz questions | `/courses/{course_id}/quizzes` and `/courses/{course_id}/quizzes/{quiz_id}/questions` |
 
 `request_json` uses the standard library HTTP client, parses JSON responses, and adds a Canvas authorization header. HTTP errors become `CanvasAPIError` with contextual messages for common 401 and 404 cases. Do not catch broad exceptions around this client: unexpected failures should remain visible rather than being mistaken for successful exports or cleanup.
 
