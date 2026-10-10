@@ -88,7 +88,7 @@ class CanvasApiClientStudentsTests(unittest.TestCase):
             },
         )
 
-    def test_list_course_groups_includes_member_users(self) -> None:
+    def test_list_course_groups_fetches_users_per_group(self) -> None:
         client = RecordingCanvasClient()
 
         groups = client.list_course_groups(course_id=321)
@@ -99,7 +99,6 @@ class CanvasApiClientStudentsTests(unittest.TestCase):
             client.last_params,
             {
                 "per_page": 100,
-                "include[]": ["users"],
             },
         )
 
