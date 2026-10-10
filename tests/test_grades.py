@@ -135,6 +135,11 @@ class FakeRubricGradesClient(FakeGradesClient):
         super().__init__()
         self.assignment_requests: list[tuple[int, int, bool]] = []
         self.submission_requests: list[tuple[int, int, bool, bool]] = []
+        self.list_assignment_requests: list[int] = []
+
+    def list_assignments(self, course_id: int, *, include_rubric: bool = False) -> list[dict[str, object]]:
+        self.list_assignment_requests.append(course_id)
+        return super().list_assignments(course_id, include_rubric=include_rubric)
 
     def get_assignment(
         self,
@@ -146,6 +151,7 @@ class FakeRubricGradesClient(FakeGradesClient):
         self.assignment_requests.append((course_id, assignment_id, include_rubric))
         return {
             "id": assignment_id,
+            "name": "Assessment 1: Intro / Basics",
             "rubric": [
                 {
                     "id": "_criterion-1",
@@ -188,9 +194,9 @@ class FakeRubricGradesClient(FakeGradesClient):
                     },
                     "criterion_unknown": {
                         "rating_id": "rating-custom",
-                        "description": "Custom descriptor",
+                        "description": "=1+1",
                         "points": 2,
-                        "comments": "Manual score.",
+                        "comments": "=1+1",
                     },
                 },
             }
@@ -336,9 +342,11 @@ class GradeExportTests(unittest.TestCase):
             )
 
             workbook = load_workbook(written_files[0], data_only=False)
-            rubric_rows = list(workbook["Rubric Assessments"].iter_rows(values_only=True))
+            rubric_sheet = workbook["Rubric Assessments"]
+            rubric_rows = list(rubric_sheet.iter_rows(values_only=True))
 
         self.assertEqual(client.assignment_requests, [(123, 101, True)])
+        self.assertEqual(client.list_assignment_requests, [])
         self.assertEqual(client.submission_requests, [(123, 101, True, True)])
         self.assertEqual(list(rubric_rows[0]), RUBRIC_ASSESSMENT_HEADERS)
         self.assertEqual(
@@ -362,7 +370,9 @@ class GradeExportTests(unittest.TestCase):
                 "Well supported.",
             ),
         )
-        self.assertEqual(rubric_rows[2][10:16], ("criterion_unknown", None, "rating-custom", "Custom descriptor", 2, "Manual score."))
+        self.assertEqual(rubric_rows[2][10:16], ("criterion_unknown", None, "rating-custom", "=1+1", 2, "=1+1"))
+        self.assertEqual(rubric_sheet["N3"].data_type, "s")
+        self.assertEqual(rubric_sheet["P3"].data_type, "s")
 
     def test_cli_exposes_grades_subcommand(self) -> None:
         parser = build_parser()
@@ -372,7 +382,7 @@ class GradeExportTests(unittest.TestCase):
         self.assertEqual(args.assignment, "456")
         self.assertTrue(args.rubric_assessment)
 
-    def test_export_assignment_grades_sanitizes_formula_injection(self) -> None:
+    def test_export_assignment_grades_preserves_formula_like_text_as_strings(self) -> None:
         class FakeFormulaClient(FakeGradesClient):
             def list_submissions(
                 self,
@@ -402,14 +412,19 @@ class GradeExportTests(unittest.TestCase):
                 output=Path(temp_dir),
             )
             workbook = load_workbook(written_files[0], data_only=False)
-            grade_rows = list(workbook["Grades"].iter_rows(values_only=True))
+            grades_sheet = workbook["Grades"]
+            grade_rows = list(grades_sheet.iter_rows(values_only=True))
 
         # Row 1 is headers; row 2 is the data row
         data_row = grade_rows[1]
-        self.assertEqual(data_row[3], "'=SUM(A1:A5)")  # Student_Name
-        self.assertEqual(data_row[4], "'=cmd|' /C calc'!A0")  # Student_Login_ID
-        self.assertEqual(data_row[6], "'=1+1")  # Grade
-        self.assertEqual(data_row[7], "'=1+1")  # Entered_Grade
+        self.assertEqual(data_row[3], "=SUM(A1:A5)")  # Student_Name
+        self.assertEqual(data_row[4], "=cmd|' /C calc'!A0")  # Student_Login_ID
+        self.assertEqual(data_row[6], "=1+1")  # Grade
+        self.assertEqual(data_row[7], "=1+1")  # Entered_Grade
+        self.assertEqual(grades_sheet["D2"].data_type, "s")
+        self.assertEqual(grades_sheet["E2"].data_type, "s")
+        self.assertEqual(grades_sheet["G2"].data_type, "s")
+        self.assertEqual(grades_sheet["H2"].data_type, "s")
 
     def test_export_assignment_grades_bulk_reuses_rubrics_without_n_plus_one_calls(self) -> None:
         class FakeBulkRubricClient(FakeGradesClient):
