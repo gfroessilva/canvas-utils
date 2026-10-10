@@ -85,19 +85,18 @@ def export_assignment_grades(
     include_rubric_assessment: bool = False,
 ) -> list[Path]:
     """Export assignment grades with grader identity to XLSX."""
-    target_assignments = _resolve_assignment_records(client, course_id, assignment_id)
+    target_assignments = _resolve_assignment_records(
+        client,
+        course_id,
+        assignment_id,
+        include_rubric=include_rubric_assessment,
+    )
     output_path = Path(output)
     grader_cache: dict[int, dict[str, Any]] = {}
     written_files: list[Path] = []
 
-    for current_assignment_id, assignment_name in target_assignments:
+    for current_assignment_id, assignment_name, rubric_criteria in target_assignments:
         if include_rubric_assessment:
-            rubric_assignment = client.get_assignment(
-                course_id=course_id,
-                assignment_id=current_assignment_id,
-                include_rubric=True,
-            )
-            rubric_criteria = _extract_rubric_criteria(rubric_assignment)
             submissions = client.list_submissions(
                 course_id=course_id,
                 assignment_id=current_assignment_id,
@@ -105,7 +104,6 @@ def export_assignment_grades(
                 include_rubric_assessment=True,
             )
         else:
-            rubric_criteria = []
             submissions = client.list_submissions(
                 course_id=course_id,
                 assignment_id=current_assignment_id,
@@ -314,21 +312,42 @@ def _resolve_assignment_records(
     client: CanvasClient,
     course_id: int,
     assignment_id: int | None,
-) -> list[tuple[int, str]]:
-    assignments = client.list_assignments(course_id)
-    assignment_records = [
-        (current_id, _assignment_name(assignment))
+    *,
+    include_rubric: bool = False,
+) -> list[tuple[int, str, list[dict[str, Any]]]]:
+    if assignment_id is not None:
+        assignments = client.list_assignments(course_id)
+        matched_name: str | None = None
+        for assignment in assignments:
+            current_id = _coerce_positive_int(assignment.get("id"))
+            if current_id == assignment_id:
+                matched_name = _assignment_name(assignment)
+                break
+
+        assignment_name = matched_name or f"assignment-{assignment_id}"
+        if include_rubric:
+            rubric_assignment = client.get_assignment(
+                course_id=course_id,
+                assignment_id=assignment_id,
+                include_rubric=True,
+            )
+            name = _assignment_name(rubric_assignment)
+            if name == "assignment" and assignment_name != "assignment":
+                name = assignment_name
+            return [(assignment_id, name, _extract_rubric_criteria(rubric_assignment))]
+
+        return [(assignment_id, assignment_name, [])]
+
+    assignments = client.list_assignments(course_id, include_rubric=include_rubric)
+    return [
+        (
+            current_id,
+            _assignment_name(assignment),
+            _extract_rubric_criteria(assignment) if include_rubric else [],
+        )
         for assignment in assignments
         if (current_id := _coerce_positive_int(assignment.get("id"))) is not None
     ]
-
-    if assignment_id is not None:
-        for current_id, name in assignment_records:
-            if current_id == assignment_id:
-                return [(current_id, name)]
-        return [(assignment_id, f"assignment-{assignment_id}")]
-
-    return assignment_records
 
 
 def _resolve_xlsx_output_path(
@@ -376,10 +395,16 @@ def _write_workbook(
     workbook.save(xlsx_path)
 
 
+def _sanitize_cell_value(val: Any) -> Any:
+    if isinstance(val, str) and val.startswith("="):
+        return f"'{val}"
+    return val
+
+
 def _append_sheet_rows(worksheet: Any, headers: list[str], rows: list[dict[str, Any]]) -> None:
     worksheet.append(headers)
     for row in rows:
-        worksheet.append([row.get(header) for header in headers])
+        worksheet.append([_sanitize_cell_value(row.get(header)) for header in headers])
 
 
 def _append_marker_statistics_rows(worksheet: Any, rows: list[dict[str, Any]]) -> None:
@@ -387,11 +412,11 @@ def _append_marker_statistics_rows(worksheet: Any, rows: list[dict[str, Any]]) -
     for row_number, row in enumerate(rows, start=2):
         worksheet.append(
             [
-                row.get("Grader_ID"),
-                row.get("Grader_Name"),
-                row.get("Grader_Login_ID"),
-                row.get("Grader_SIS_ID"),
-                row.get("Grader_Type"),
+                _sanitize_cell_value(row.get("Grader_ID")),
+                _sanitize_cell_value(row.get("Grader_Name")),
+                _sanitize_cell_value(row.get("Grader_Login_ID")),
+                _sanitize_cell_value(row.get("Grader_SIS_ID")),
+                _sanitize_cell_value(row.get("Grader_Type")),
                 _count_submissions_formula(row_number),
                 _count_scored_submissions_formula(row_number),
                 f"=F{row_number}-G{row_number}",

@@ -154,6 +154,7 @@ Options:
 - --course (required)
 - --assignment (default: all)
 - --output (default: current directory)
+- --rubric-assessment (optional; includes criterion ratings and comments in a Rubric Assessments worksheet)
 
 Examples:
 
@@ -163,6 +164,7 @@ Examples:
 ```powershell
 python .\run.py grades --course 12345 --assignment 67890 --output .\exports
 python .\run.py grades --course 12345 --assignment all --output .\exports
+python .\run.py grades --course 12345 --assignment 67890 --output .\exports --rubric-assessment
 ```
 
 </details>
@@ -173,6 +175,7 @@ python .\run.py grades --course 12345 --assignment all --output .\exports
 ```bash
 python3 ./run.py grades --course 12345 --assignment 67890 --output ./exports
 python3 ./run.py grades --course 12345 --assignment all --output ./exports
+python3 ./run.py grades --course 12345 --assignment 67890 --output ./exports --rubric-assessment
 ```
 
 </details>
@@ -299,6 +302,7 @@ XLSX worksheets:
 
 - Grades
 - Marker Statistics
+- Rubric Assessments (optional; generated when --rubric-assessment is supplied)
 
 Grades columns:
 
@@ -316,6 +320,25 @@ Grades columns:
 - Grader_Login_ID
 - Grader_SIS_ID
 - Grader_Type
+
+Rubric Assessments columns:
+
+- Assignment_ID
+- Assignment_Name
+- Student_ID
+- Student_Name
+- Student_Login_ID
+- Grader_ID
+- Grader_Name
+- Grader_Login_ID
+- Grader_SIS_ID
+- Grader_Type
+- Criterion_ID
+- Criterion_Description
+- Rating_ID
+- Selected_Descriptor
+- Points
+- Comments
 
 Marker Statistics summary columns:
 
@@ -347,8 +370,9 @@ Students columns:
 - Email
 - Student Number
 - ID
+- Groups
 
-Email uses Canvas email when available, otherwise login_id fallback.
+Email uses Canvas email when available, otherwise login_id fallback. Multiple group memberships are semicolon-separated.
 
 Filename pattern:
 

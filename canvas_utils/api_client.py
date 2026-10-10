@@ -50,11 +50,14 @@ class CanvasClient:
         self.token = token
         self.timeout = timeout
 
-    def list_assignments(self, course_id: int) -> list[dict[str, Any]]:
+    def list_assignments(self, course_id: int, *, include_rubric: bool = False) -> list[dict[str, Any]]:
         """Return all assignments for a course."""
+        params: dict[str, Any] = {"per_page": 100}
+        if include_rubric:
+            params["include[]"] = ["rubric"]
         payload = self.get_paginated_json(
             f"/api/v1/courses/{course_id}/assignments",
-            params={"per_page": 100},
+            params=params,
         )
         return self._expect_list(payload, "assignments")
 
@@ -187,12 +190,17 @@ class CanvasClient:
         """Return course groups with their member users."""
         payload = self.get_paginated_json(
             f"/api/v1/courses/{course_id}/groups",
-            params={
-                "per_page": 100,
-                "include[]": ["users"],
-            },
+            params={"per_page": 100},
         )
-        return self._expect_list(payload, "course groups")
+        groups = self._expect_list(payload, "course groups")
+        for group in groups:
+            group_id = group.get("id")
+            if isinstance(group_id, int):
+                group["users"] = self.get_paginated_json(
+                    f"/api/v1/groups/{group_id}/users",
+                    params={"per_page": 100},
+                )
+        return groups
 
     def list_pages(self, course_id: int) -> list[dict[str, Any]]:
         """Return all course pages."""
