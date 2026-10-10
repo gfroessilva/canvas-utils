@@ -41,24 +41,53 @@ class CanvasClient:
         self.token = token
         self.timeout = timeout
 
-    def list_assignments(self, course_id: int) -> list[dict[str, Any]]:
+    def list_assignments(self, course_id: int, *, include_rubric: bool = False) -> list[dict[str, Any]]:
         """Return all assignments for a course."""
+        params: dict[str, Any] = {"per_page": 100}
+        if include_rubric:
+            params["include[]"] = ["rubric"]
         payload = self.get_paginated_json(
             f"/api/v1/courses/{course_id}/assignments",
-            params={"per_page": 100},
+            params=params,
         )
         return self._expect_list(payload, "assignments")
+
+    def get_assignment(
+        self,
+        course_id: int,
+        assignment_id: int,
+        *,
+        include_rubric: bool = False,
+    ) -> dict[str, Any]:
+        """Return a specific assignment, optionally including its rubric."""
+        params: dict[str, Any] | None = None
+        if include_rubric:
+            params = {"include[]": ["rubric"]}
+
+        response = self.request_json(
+            f"/api/v1/courses/{course_id}/assignments/{assignment_id}",
+            method="GET",
+            params=params,
+        )
+        return self._expect_dict(response.payload, "assignment")
 
     def list_submissions(
         self,
         course_id: int,
         assignment_id: int,
         include_user: bool = True,
+        *,
+        include_rubric_assessment: bool = False,
     ) -> list[dict[str, Any]]:
         """Return all submissions for a specific assignment."""
         params: dict[str, Any] = {"per_page": 100}
+        includes: list[str] = []
         if include_user:
-            params["include[]"] = ["user"]
+            includes.append("user")
+        if include_rubric_assessment:
+            includes.append("rubric_assessment")
+        if includes:
+            params["include[]"] = includes
 
         payload = self.get_paginated_json(
             f"/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions",
