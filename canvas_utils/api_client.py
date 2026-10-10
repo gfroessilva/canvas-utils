@@ -339,6 +339,83 @@ class CanvasClient:
             method="DELETE",
         )
 
+    def list_quizzes(self, course_id: int) -> list[dict[str, Any]]:
+        """Return all quizzes for a course."""
+        payload = self.get_paginated_json(
+            f"/api/v1/courses/{course_id}/quizzes",
+            params={"per_page": 100},
+        )
+        return self._expect_list(payload, "quizzes")
+
+    def get_quiz(self, course_id: int, quiz_id: int) -> dict[str, Any]:
+        """Return details for a specific quiz."""
+        response = self.request_json(
+            f"/api/v1/courses/{course_id}/quizzes/{quiz_id}",
+            method="GET",
+        )
+        return self._expect_dict(response.payload, "quiz")
+
+    def create_quiz(self, course_id: int, quiz_data: dict[str, Any]) -> dict[str, Any]:
+        """Create a new quiz in a course."""
+        form_data = {f"quiz[{key}]": value for key, value in quiz_data.items() if value is not None}
+        response = self.request_json(
+            f"/api/v1/courses/{course_id}/quizzes",
+            method="POST",
+            form_data=form_data,
+        )
+        return self._expect_dict(response.payload, "created quiz")
+
+    def delete_quiz(self, course_id: int, quiz_id: int) -> None:
+        """Delete a specific quiz."""
+        self.request_json(
+            f"/api/v1/courses/{course_id}/quizzes/{quiz_id}",
+            method="DELETE",
+        )
+
+    def update_quiz(self, course_id: int, quiz_id: int, quiz_data: dict[str, Any]) -> dict[str, Any]:
+        """Update an existing quiz in a course."""
+        form_data = {f"quiz[{key}]": value for key, value in quiz_data.items() if value is not None}
+        response = self.request_json(
+            f"/api/v1/courses/{course_id}/quizzes/{quiz_id}",
+            method="PUT",
+            form_data=form_data,
+        )
+        return self._expect_dict(response.payload, "updated quiz")
+
+    def list_quiz_questions(self, course_id: int, quiz_id: int) -> list[dict[str, Any]]:
+        """Return all questions for a specific quiz."""
+        payload = self.get_paginated_json(
+            f"/api/v1/courses/{course_id}/quizzes/{quiz_id}/questions",
+            params={"per_page": 100},
+        )
+        return self._expect_list(payload, "quiz questions")
+
+    def create_quiz_question(
+        self,
+        course_id: int,
+        quiz_id: int,
+        question_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create a question for a specific quiz."""
+        # Convert nested question dict to form data parameters
+        form_data: dict[str, Any] = {}
+        for key, value in question_data.items():
+            if key == "answers" and isinstance(value, list):
+                for idx, ans in enumerate(value):
+                    if isinstance(ans, dict):
+                        for ans_k, ans_v in ans.items():
+                            if ans_v is not None:
+                                form_data[f"question[answers][{idx}][{ans_k}]"] = ans_v
+            elif value is not None:
+                form_data[f"question[{key}]"] = value
+
+        response = self.request_json(
+            f"/api/v1/courses/{course_id}/quizzes/{quiz_id}/questions",
+            method="POST",
+            form_data=form_data,
+        )
+        return self._expect_dict(response.payload, "created quiz question")
+
     def get_paginated_json(
         self,
         path_or_url: str,

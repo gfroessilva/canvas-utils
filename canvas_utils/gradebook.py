@@ -1204,6 +1204,9 @@ def _sanitize_cell_value(val: Any) -> Any:
 
 def _append_sheet_row(worksheet: Any, row: Iterable[Any]) -> None:
     worksheet.append([_sanitize_cell_value(cell) for cell in row])
+    for cell in worksheet[worksheet.max_row]:
+        if isinstance(cell.value, str):
+            cell.data_type = "s"
 
 
 def _write_grades_sheet(
@@ -1609,8 +1612,8 @@ def _resolve_mapped_table(
             continue
         if column_number in seen_columns:
             errors.append(
-                f"{MAPPING_SHEET} maps multiple fields ('{seen_columns[column_number]}' and '{field}') "
-                f"to the same column '{mapping.column_name}' on sheet '{sheet_name}'."
+                f"{MAPPING_SHEET} maps both '{seen_columns[column_number]}' and '{field}' "
+                f"to column '{mapping.column_name}' on sheet '{sheet_name}'."
             )
             continue
         seen_columns[column_number] = field

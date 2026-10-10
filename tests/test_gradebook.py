@@ -749,7 +749,7 @@ class GradebookTests(unittest.TestCase):
             mapping_sheet["C5"] = "New_Grade"
             workbook.save(gradebook_path)
 
-            with self.assertRaisesRegex(GradebookValidationError, "maps multiple fields .* to the same column"):
+            with self.assertRaisesRegex(GradebookValidationError, "maps both .* to column"):
                 build_gradebook_plan(
                     client=client,
                     course_id=123,
@@ -792,6 +792,9 @@ class GradebookTests(unittest.TestCase):
             self.assertEqual(grades["B2"].value, "'=SUM(A1:A5)")
             self.assertEqual(grades["C2"].value, "'=cmd|' /C calc'!A0")
             self.assertEqual(grades["D2"].value, "'=1+1")
+            self.assertEqual(grades["B2"].data_type, "s")
+            self.assertEqual(grades["C2"].data_type, "s")
+            self.assertEqual(grades["D2"].data_type, "s")
 
     def test_plan_rejects_rubric_upload_when_submission_attempt_changes(self) -> None:
         client = FakeGradebookClient()

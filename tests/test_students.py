@@ -70,10 +70,10 @@ class StudentExportTests(unittest.TestCase):
         self.assertEqual(client.calls, [(123, False)])
         self.assertEqual(client.group_calls, [123])
         self.assertEqual(list(rows[0]), STUDENT_HEADERS)
-        self.assertEqual(rows[1], ("Jane Doe", "jane@example.edu", "S12345", 12345, "Project Group A"))
+        self.assertEqual(rows[1], ("Jane Doe", "jane@example.edu", "12345", 7, "Project Group A"))
         self.assertEqual(
             rows[2],
-            ("John Roe", "jroe@example.edu", "S98765", 98765, "Project Group A; Project Group B"),
+            ("John Roe", "jroe@example.edu", "98765", 8, "Project Group A; Project Group B"),
         )
 
     def test_export_course_students_accepts_explicit_xlsx_path(self) -> None:
