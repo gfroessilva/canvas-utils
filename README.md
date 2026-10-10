@@ -347,8 +347,9 @@ Students columns:
 - Email
 - Student Number
 - ID
+- Groups
 
-Email uses Canvas email when available, otherwise login_id fallback.
+Student Number contains the Canvas SIS user ID; ID contains the Canvas user ID. Email uses Canvas email when available, otherwise login_id fallback. Multiple group memberships are semicolon-separated.
 
 Filename pattern:
 

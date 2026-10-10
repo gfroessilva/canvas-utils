@@ -81,6 +81,22 @@ class CanvasClient:
         )
         return self._expect_list(payload, "course students")
 
+    def list_course_groups(self, course_id: int) -> list[dict[str, Any]]:
+        """Return course groups with their member users."""
+        payload = self.get_paginated_json(
+            f"/api/v1/courses/{course_id}/groups",
+            params={"per_page": 100},
+        )
+        groups = self._expect_list(payload, "course groups")
+        for group in groups:
+            group_id = group.get("id")
+            if isinstance(group_id, int):
+                group["users"] = self.get_paginated_json(
+                    f"/api/v1/groups/{group_id}/users",
+                    params={"per_page": 100},
+                )
+        return groups
+
     def list_pages(self, course_id: int) -> list[dict[str, Any]]:
         """Return all course pages."""
         payload = self.get_paginated_json(

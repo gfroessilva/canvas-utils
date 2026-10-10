@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter
 
 from canvas_utils.api_client import CanvasClient
 
-STUDENT_HEADERS = ["Student", "Email", "Student Number", "ID"]
+STUDENT_HEADERS = ["Student", "Email", "Student Number", "ID", "Groups"]
 
 
 def export_course_students(
@@ -23,19 +23,42 @@ def export_course_students(
 ) -> list[Path]:
     """Export a course student roster to XLSX."""
     student_records = client.list_course_students(course_id, active_only=active_only)
-    rows = [_map_student_row(record) for record in student_records]
+    memberships = _build_group_memberships(client.list_course_groups(course_id))
+    rows = [_map_student_row(record, memberships) for record in student_records]
 
     xlsx_path = _resolve_xlsx_output_path(Path(output), course_id)
     _write_workbook(xlsx_path, rows)
     return [xlsx_path]
 
 
-def _map_student_row(student: dict[str, Any]) -> dict[str, Any]:
+def _map_student_row(student: dict[str, Any], memberships: dict[int, str]) -> dict[str, Any]:
     return {
         "Student": _string_or_none(student.get("name")),
         "Email": _string_or_none(student.get("email")) or _string_or_none(student.get("login_id")),
         "Student Number": _string_or_none(student.get("sis_user_id")),
         "ID": _coerce_positive_int(student.get("id")),
+        "Groups": memberships.get(_coerce_positive_int(student.get("id")) or -1),
+    }
+
+
+def _build_group_memberships(groups: list[dict[str, Any]]) -> dict[int, str]:
+    memberships: dict[int, set[str]] = {}
+    for group in groups:
+        group_name = _string_or_none(group.get("name"))
+        users = group.get("users")
+        if group_name is None or not isinstance(users, list):
+            continue
+
+        for user in users:
+            if not isinstance(user, dict):
+                continue
+            user_id = _coerce_positive_int(user.get("id"))
+            if user_id is not None:
+                memberships.setdefault(user_id, set()).add(group_name)
+
+    return {
+        user_id: "; ".join(sorted(group_names, key=str.casefold))
+        for user_id, group_names in memberships.items()
     }
 
 
