@@ -41,11 +41,14 @@ class CanvasClient:
         self.token = token
         self.timeout = timeout
 
-    def list_assignments(self, course_id: int) -> list[dict[str, Any]]:
+    def list_assignments(self, course_id: int, *, include_rubric: bool = False) -> list[dict[str, Any]]:
         """Return all assignments for a course."""
+        params: dict[str, Any] = {"per_page": 100}
+        if include_rubric:
+            params["include[]"] = ["rubric"]
         payload = self.get_paginated_json(
             f"/api/v1/courses/{course_id}/assignments",
-            params={"per_page": 100},
+            params=params,
         )
         return self._expect_list(payload, "assignments")
 

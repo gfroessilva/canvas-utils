@@ -102,6 +102,44 @@ class CanvasApiClientStudentsTests(unittest.TestCase):
             },
         )
 
+    def test_list_submissions_retains_user_and_adds_rubric_assessment(self) -> None:
+        client = RecordingCanvasClient()
+
+        submissions = client.list_submissions(
+            course_id=321,
+            assignment_id=654,
+            include_user=True,
+            include_rubric_assessment=True,
+        )
+
+        self.assertEqual(submissions, [])
+        self.assertEqual(
+            client.last_path_or_url,
+            "/api/v1/courses/321/assignments/654/submissions",
+        )
+        self.assertEqual(
+            client.last_params,
+            {
+                "per_page": 100,
+                "include[]": ["user", "rubric_assessment"],
+            },
+        )
+
+    def test_list_assignments_adds_rubric_include(self) -> None:
+        client = RecordingCanvasClient()
+
+        assignments = client.list_assignments(course_id=321, include_rubric=True)
+
+        self.assertEqual(assignments, [])
+        self.assertEqual(client.last_path_or_url, "/api/v1/courses/321/assignments")
+        self.assertEqual(
+            client.last_params,
+            {
+                "per_page": 100,
+                "include[]": ["rubric"],
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,7 +22,7 @@ class FakeGradesClient:
         self.user_requests: list[int] = []
         self.course_user_requests: list[tuple[int, int]] = []
 
-    def list_assignments(self, course_id: int) -> list[dict[str, object]]:
+    def list_assignments(self, course_id: int, *, include_rubric: bool = False) -> list[dict[str, object]]:
         return [{"id": 101, "name": "Assessment 1: Intro / Basics"}]
 
     def list_submissions(
@@ -371,6 +371,97 @@ class GradeExportTests(unittest.TestCase):
         self.assertEqual(args.course, 123)
         self.assertEqual(args.assignment, "456")
         self.assertTrue(args.rubric_assessment)
+
+    def test_export_assignment_grades_sanitizes_formula_injection(self) -> None:
+        class FakeFormulaClient(FakeGradesClient):
+            def list_submissions(
+                self,
+                course_id: int,
+                assignment_id: int,
+                include_user: bool = True,
+            ) -> list[dict[str, object]]:
+                return [
+                    {
+                        "assignment_id": assignment_id,
+                        "user_id": 1,
+                        "score": 10,
+                        "grade": "=1+1",
+                        "entered_grade": "=1+1",
+                        "workflow_state": "graded",
+                        "grader_id": 99,
+                        "user": {"name": "=SUM(A1:A5)", "login_id": "=cmd|' /C calc'!A0"},
+                    }
+                ]
+
+        client = FakeFormulaClient()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            written_files = export_assignment_grades(
+                client=client,
+                course_id=123,
+                assignment_id=101,
+                output=Path(temp_dir),
+            )
+            workbook = load_workbook(written_files[0], data_only=False)
+            grade_rows = list(workbook["Grades"].iter_rows(values_only=True))
+
+        # Row 1 is headers; row 2 is the data row
+        data_row = grade_rows[1]
+        self.assertEqual(data_row[3], "'=SUM(A1:A5)")  # Student_Name
+        self.assertEqual(data_row[4], "'=cmd|' /C calc'!A0")  # Student_Login_ID
+        self.assertEqual(data_row[6], "'=1+1")  # Grade
+        self.assertEqual(data_row[7], "'=1+1")  # Entered_Grade
+
+    def test_export_assignment_grades_bulk_reuses_rubrics_without_n_plus_one_calls(self) -> None:
+        class FakeBulkRubricClient(FakeGradesClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.list_assignment_calls: list[bool] = []
+                self.get_assignment_calls: list[int] = []
+
+            def list_assignments(self, course_id: int, *, include_rubric: bool = False) -> list[dict[str, object]]:
+                self.list_assignment_calls.append(include_rubric)
+                return [
+                    {
+                        "id": 101,
+                        "name": "Assessment 1",
+                        "rubric": [{"id": "_c1", "description": "Crit 1"}],
+                    },
+                    {
+                        "id": 102,
+                        "name": "Assessment 2",
+                        "rubric": [{"id": "_c2", "description": "Crit 2"}],
+                    },
+                ]
+
+            def get_assignment(self, course_id: int, assignment_id: int, *, include_rubric: bool = False) -> dict[str, object]:
+                self.get_assignment_calls.append(assignment_id)
+                return {"id": assignment_id}
+
+            def list_submissions(
+                self,
+                course_id: int,
+                assignment_id: int,
+                include_user: bool = True,
+                *,
+                include_rubric_assessment: bool = False,
+            ) -> list[dict[str, object]]:
+                return []
+
+        client = FakeBulkRubricClient()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            written_files = export_assignment_grades(
+                client=client,
+                course_id=123,
+                assignment_id=None,
+                output=Path(temp_dir),
+                include_rubric_assessment=True,
+            )
+            self.assertEqual(len(written_files), 2)
+
+        # list_assignments should have been called once with include_rubric=True
+        self.assertEqual(client.list_assignment_calls, [True])
+        # get_assignment should NOT have been called (no N+1 queries)
+        self.assertEqual(client.get_assignment_calls, [])
 
 
 if __name__ == "__main__":
