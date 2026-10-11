@@ -2,8 +2,14 @@
 
 canvas-utils is a Python utility package for automating Canvas LMS course administration workflows.
 
+## Documentation
+
+- [User guide](docs/USER_GUIDE.md) - installation, authentication, complete command reference, output schemas, and cleanup safety.
+- [Developer guide](docs/DEVELOPER_GUIDE.md) - architecture, Canvas API integration, module contracts, testing, and extension guidance.
+
 ## Table of Contents
 
+- [Documentation](#documentation)
 - [Requirements](#requirements)
 - [Setup](#setup)
 - [Credentials](#credentials)
@@ -11,11 +17,14 @@ canvas-utils is a Python utility package for automating Canvas LMS course admini
 - [Subcommands](#subcommands)
   - [submissions](#submissions)
   - [grades](#grades)
+  - [gradebook](#gradebook)
   - [students](#students)
   - [cleanup](#cleanup)
+  - [quiz](#quiz)
 - [Outputs](#outputs)
   - [Submissions Output](#submissions-output)
   - [Grades Output](#grades-output)
+  - [Gradebook Output](#gradebook-output)
   - [Students Output](#students-output)
 - [Examples](#examples)
 
@@ -23,7 +32,7 @@ canvas-utils is a Python utility package for automating Canvas LMS course admini
 
 - Python 3.10+
 - Canvas base URL (for example https://canvas.example.edu)
-- Canvas API token with permission to read course data
+- Canvas API token with permission to read course data; gradebook upload also requires grading permission
 
 ## Setup
 
@@ -149,6 +158,8 @@ python3 ./run.py submissions --course 12345 --assignment 67890 --fields score,wo
 
 Export assignment grades and grader identity to XLSX.
 
+The `Grades` worksheet contains Canvas's assignment-level `score`, `grade`, and `entered_grade` values. Add `--rubric-assessment` to request each submission's `rubric_assessment` data and write a per-criterion `Rubric Assessments` worksheet with the selected descriptor.
+
 Options:
 
 - --course (required)
@@ -180,11 +191,51 @@ python3 ./run.py grades --course 12345 --assignment 67890 --output ./exports --r
 
 </details>
 
+### gradebook
+
+Create a controlled XLSX template for one assignment, validate its planned changes against Canvas, then upload only with explicit confirmation. The template supports assignment grades, rubric descriptor selection and points, criterion comments, and new submission comments.
+
+Options:
+
+- template: --course (required), --assignment (required), --output (optional)
+- validate: --course (required), --assignment (required), --input (required)
+- upload: --course (required), --assignment (required), --input (required), --execute (optional), --journal (optional), --retry-indeterminate (optional)
+
+Examples:
+
+<details open>
+<summary>PowerShell</summary>
+
+```powershell
+python .\run.py gradebook template --course 12345 --assignment 67890 --output .\exports\gradebook.xlsx
+python .\run.py gradebook validate --course 12345 --assignment 67890 --input .\exports\gradebook.xlsx
+python .\run.py gradebook upload --course 12345 --assignment 67890 --input .\exports\gradebook.xlsx
+python .\run.py gradebook upload --course 12345 --assignment 67890 --input .\exports\gradebook.xlsx --execute
+```
+
+</details>
+
+<details>
+<summary>Linux/macOS (bash)</summary>
+
+```bash
+python3 ./run.py gradebook template --course 12345 --assignment 67890 --output ./exports/gradebook.xlsx
+python3 ./run.py gradebook validate --course 12345 --assignment 67890 --input ./exports/gradebook.xlsx
+python3 ./run.py gradebook upload --course 12345 --assignment 67890 --input ./exports/gradebook.xlsx
+python3 ./run.py gradebook upload --course 12345 --assignment 67890 --input ./exports/gradebook.xlsx --execute
+```
+
+</details>
+
+The template uses Canvas user IDs, explicit `SET`/`KEEP`/`ADD` actions, rubric descriptor dropdowns, and hidden metadata/snapshot sheets. `Canvas Mapping` lets renamed data columns be mapped explicitly. Upload validates the workbook and live Canvas state before a write, then rechecks each grade, rubric, or comment change immediately before sending it; comments target the validated submission attempt. Without `--execute`, it only reports the proposed per-student changes. Submission comments are additive.
+
+Executed uploads create a `<workbook>.upload-journal.json` sidecar and local lock by default. The journal records a pending request before Canvas is contacted, then prevents that pending, successfully applied, or indeterminate request from being resent accidentally. Each generated template has a distinct journal identity, so a fresh template can still submit the same value later. `--retry-indeterminate --execute` explicitly overrides pending/indeterminate protection and can duplicate a submission comment.
+
 ### students
 
 Export course student roster to XLSX.
 
-The export includes all student enrollments returned by Canvas.
+The export includes all student enrollments returned by Canvas and the groups each student belongs to.
 
 Options:
 
@@ -261,6 +312,67 @@ python3 ./run.py cleanup --course 12345 --targets all --execute
 </details>
 
 Note: the Canvas syllabus Course Summary may still contain dated course items unless related resources are also removed (for example assessments, discussions, calendar).
+
+### quiz
+
+Author, validate, and programmatically create Canvas quizzes from Excel or JSON specifications.
+
+Actions:
+
+- template: `--output` (default: `quiz_template.xlsx`)
+- create: `--course` (required), `--input` (required; `.xlsx` or `.json`), `--publish` (optional; defaults to draft), `--dry-run` (optional)
+
+Supported Question Types:
+
+- `multiple_choice`: Single correct answer from multiple choices
+- `true_false`: True or False question
+- `multiple_answers`: Multiple correct answers (checkboxes)
+- `short_answer`: Text input matching
+- `essay`: Freeform text response
+
+Examples:
+
+<details open>
+<summary>PowerShell</summary>
+
+```powershell
+# 1. Generate an Excel or JSON quiz template
+python .\run.py quiz template --output .\exports\quiz_template.xlsx
+python .\run.py quiz template --output .\exports\quiz_template.json
+
+# 2. Validate the quiz format without creating it in Canvas (dry-run)
+python .\run.py quiz create --course 12345 --input .\exports\quiz_template.xlsx --dry-run
+python .\run.py quiz create --course 12345 --input .\exports\quiz_template.json --dry-run
+
+# 3. Create the quiz in Canvas
+python .\run.py quiz create --course 12345 --input .\exports\quiz_template.xlsx
+
+# 4. Create and publish immediately
+python .\run.py quiz create --course 12345 --input .\exports\quiz_template.xlsx --publish
+```
+
+</details>
+
+<details>
+<summary>Linux/macOS (bash)</summary>
+
+```bash
+# 1. Generate an Excel or JSON quiz template
+python3 ./run.py quiz template --output ./exports/quiz_template.xlsx
+python3 ./run.py quiz template --output ./exports/quiz_template.json
+
+# 2. Validate the quiz format without creating it in Canvas (dry-run)
+python3 ./run.py quiz create --course 12345 --input ./exports/quiz_template.xlsx --dry-run
+python3 ./run.py quiz create --course 12345 --input ./exports/quiz_template.json --dry-run
+
+# 3. Create the quiz in Canvas
+python3 ./run.py quiz create --course 12345 --input ./exports/quiz_template.xlsx
+
+# 4. Create and publish immediately
+python3 ./run.py quiz create --course 12345 --input ./exports/quiz_template.xlsx --publish
+```
+
+</details>
 
 ## Outputs
 
@@ -353,10 +465,22 @@ Notes:
 
 - Grader_Type values include human, automatic, ungraded, and unresolvable.
 - Marker statistics are written as formulas and recalculate in Excel.
+- Grade values on the `Grades` worksheet are assignment totals.
+- The optional `Rubric Assessments` worksheet has one row per assessment returned by Canvas and includes criterion, selected descriptor, points, and comments.
 
 Filename pattern:
 
 - canvas_grades_[assignment_id]_[assignment_name]_[export_date].xlsx
+
+### Gradebook Output
+
+The generated gradebook contains `Grades`, `Rubric`, `Rubric Catalog`, `Canvas Mapping`, and `Instructions` sheets. `Grades` accepts an overall mark and an additive student comment. `Rubric` has one row per student and criterion, with a descriptor dropdown, optional points override, and criterion comment. Generate the workbook with `gradebook template`; do not use a plain `grades` export as an upload input.
+
+The template also contains hidden metadata and baseline sheets. Upload rejects a workbook when its course, assignment, rubric, selected descriptor, or baseline grade/rubric assessment no longer matches Canvas. It deliberately does not clear existing grades or comments.
+
+Filename pattern:
+
+- canvas_gradebook_[assignment_id]_[assignment_name]_[export_date].xlsx
 
 ### Students Output
 
